@@ -1,6 +1,6 @@
-﻿# OPCG 작업 폴더 전체 파일 목록 (자동 생성: 2026-08-05 03:02)
+﻿# OPCG 작업 폴더 전체 파일 목록 (자동 생성: 2026-08-05 03:06)
 # 작업 폴더: C:\Users\정민혁\Documents\OPCG
-# 파일 159355개, 총 약 22161MB
+# 파일 159389개, 총 약 22168MB
 # 형식: 상대경로<TAB>크기(byte)
 .gitkeep	0
 c-users-fatal-proj-edopro-android.zip	483483834
@@ -125291,6 +125291,23 @@ rev28_work\windows_source\bin\release\pics\880002369.png	225481
 rev28_work\windows_source\bin\release\pics\880002377.png	146058
 rev28_work\windows_source\bin\release\pics\880002378.png	150667
 rev28_work\windows_source\bin\release\pics\880002379.png	193674
+rev28_work\windows_source\bin\release\pics\880002541.jpg	292896
+rev28_work\windows_source\bin\release\pics\880002542.jpg	189074
+rev28_work\windows_source\bin\release\pics\880002543.jpg	184420
+rev28_work\windows_source\bin\release\pics\880002544.jpg	199614
+rev28_work\windows_source\bin\release\pics\880002545.jpg	159688
+rev28_work\windows_source\bin\release\pics\880002546.jpg	209413
+rev28_work\windows_source\bin\release\pics\880002547.jpg	234837
+rev28_work\windows_source\bin\release\pics\880002548.jpg	232765
+rev28_work\windows_source\bin\release\pics\880002549.jpg	178431
+rev28_work\windows_source\bin\release\pics\880002550.jpg	209108
+rev28_work\windows_source\bin\release\pics\880002551.jpg	222347
+rev28_work\windows_source\bin\release\pics\880002552.jpg	250117
+rev28_work\windows_source\bin\release\pics\880002553.jpg	212464
+rev28_work\windows_source\bin\release\pics\880002554.jpg	184936
+rev28_work\windows_source\bin\release\pics\880002555.jpg	251132
+rev28_work\windows_source\bin\release\pics\880002556.jpg	255650
+rev28_work\windows_source\bin\release\pics\880002557.jpg	238079
 rev28_work\windows_source\bin\release\pics\881000000.jpg	1089930
 rev28_work\windows_source\bin\release\pics\881000001.jpg	167675
 rev28_work\windows_source\bin\release\pics\881000002.jpg	216191
@@ -126058,6 +126075,23 @@ rev28_work\windows_source\bin\release\pics\881001099.png	148159
 rev28_work\windows_source\bin\release\pics\881001275.png	196869
 rev28_work\windows_source\bin\release\pics\881001364.png	192829
 rev28_work\windows_source\bin\release\pics\881001531.png	262119
+rev28_work\windows_source\bin\release\pics\881001645.jpg	252165
+rev28_work\windows_source\bin\release\pics\881001646.jpg	210832
+rev28_work\windows_source\bin\release\pics\881001647.jpg	222469
+rev28_work\windows_source\bin\release\pics\881001648.jpg	226266
+rev28_work\windows_source\bin\release\pics\881001649.jpg	169852
+rev28_work\windows_source\bin\release\pics\881001650.jpg	232209
+rev28_work\windows_source\bin\release\pics\881001651.jpg	236121
+rev28_work\windows_source\bin\release\pics\881001652.jpg	248056
+rev28_work\windows_source\bin\release\pics\881001653.jpg	198716
+rev28_work\windows_source\bin\release\pics\881001654.jpg	226229
+rev28_work\windows_source\bin\release\pics\881001655.jpg	244038
+rev28_work\windows_source\bin\release\pics\881001656.jpg	255763
+rev28_work\windows_source\bin\release\pics\881001657.jpg	237747
+rev28_work\windows_source\bin\release\pics\881001658.jpg	204943
+rev28_work\windows_source\bin\release\pics\881001659.jpg	250643
+rev28_work\windows_source\bin\release\pics\881001660.jpg	256258
+rev28_work\windows_source\bin\release\pics\881001661.jpg	249778
 rev28_work\windows_source\bin\release\pics\pics.zip	260014332
 rev28_work\windows_source\bin\release\puzzles\AAA_Croc_Check.lua	1553
 rev28_work\windows_source\bin\release\puzzles\AAA_Moria_Check.lua	1661
