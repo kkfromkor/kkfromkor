@@ -1,11 +1,16 @@
 ﻿# ============================================================
-#  OPCG 작업 폴더 동기화 (v2)
+#  OPCG 작업 폴더 동기화 (v5 - 선택 동기화)
 #
-#  PC 작업 폴더  : C:\Users\정민혁\Documents\OPCG
+#  PC 작업 폴더  : C:\Users\정민혁\Documents\OPCG  (전체 약 10GB)
 #  리포지토리 쪽 : <리포 루트>\OPCG
 #
+#  작업 폴더 전체는 GitHub에 올릴 수 없는 크기라서,
+#  scripts\sync-include.txt 에 적힌 하위 폴더만 양방향 동기화합니다.
+#  대신 매번 전체 파일 목록을 OPCG\_inventory.txt 로 만들어 올리고,
+#  Claude가 그 목록을 보고 필요한 폴더를 sync-include.txt에 채웁니다.
+#
 #  사용법 (보통은 리포 루트의 sync-opcg.bat 더블클릭으로 실행)
-#    scripts\sync-opcg.ps1              양방향 동기화 + commit/push (기본)
+#    scripts\sync-opcg.ps1              동기화 + commit/push (기본)
 #    scripts\sync-opcg.ps1 -Mode pull   받기만 (리포 -> 작업 폴더)
 #    scripts\sync-opcg.ps1 -Mode push   보내기만 (작업 폴더 -> 리포)
 #    scripts\sync-opcg.ps1 -NoGit       git pull/push 없이 파일 복사만
@@ -27,6 +32,7 @@ $WorkDir = "C:\Users\정민혁\Documents\OPCG"
 
 $RepoDir     = Split-Path -Parent $PSScriptRoot
 $RepoSyncDir = Join-Path $RepoDir "OPCG"
+$IncludeFile = Join-Path $PSScriptRoot "sync-include.txt"
 
 # 문서 폴더가 OneDrive 등으로 옮겨져 있으면 그쪽의 OPCG 폴더를 대신 사용
 if (-not (Test-Path $WorkDir)) {
@@ -64,37 +70,65 @@ if ($useGit) {
     git -C $RepoDir config core.quotepath false
 }
 
-# robocopy 옵션
-#   /E   하위 폴더 포함(빈 폴더 포함)   /XO  대상 파일이 더 최신이면 덮어쓰지 않음
-#   /FFT 시간 오차 2초 허용             /MAX GitHub 제한(100MB)에 걸릴 큰 파일 제외
-$RoboOpts = @(
-    "/E", "/XO", "/FFT", "/MAX:95000000",
+# robocopy 공통 옵션
+#   /XO  대상 파일이 더 최신이면 덮어쓰지 않음   /FFT 시간 오차 2초 허용
+#   /MAX GitHub 제한(100MB)에 걸릴 큰 파일 제외
+$RoboCommon = @(
+    "/XO", "/FFT", "/MAX:95000000",
     "/R:2", "/W:2", "/NJH", "/NJS", "/NDL", "/NP",
     "/XD", ".git",
     "/XF", "Thumbs.db", "desktop.ini", "~$*", "*.tmp"
 )
 
-function Invoke-Robocopy([string]$From, [string]$To, [string]$Label) {
+function Invoke-Robocopy {
+    param(
+        [string]$From,
+        [string]$To,
+        [string]$Label,
+        [switch]$Deep,
+        [string[]]$ExtraOpts = @()
+    )
     if (-not (Test-Path $From)) { return }
     New-Item -ItemType Directory -Force -Path $To -ErrorAction Stop | Out-Null
-    & robocopy $From $To @RoboOpts
+    $opts = @($RoboCommon) + $ExtraOpts
+    if ($Deep) { $opts += "/E" }
+    & robocopy $From $To @opts
     if ($LASTEXITCODE -ge 8) {
         Fail "$Label 복사 중 오류가 났습니다 (robocopy 종료 코드 $LASTEXITCODE)"
     }
+}
+
+# 동기화할 하위 폴더 목록 읽기
+$Includes = @()
+if (Test-Path $IncludeFile) {
+    $Includes = @(Get-Content -Path $IncludeFile -Encoding UTF8 |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and -not $_.StartsWith("#") })
 }
 
 Write-Host ""
 Write-Host "=== OPCG 동기화 시작 (모드: $Mode) ==="
 Write-Host "작업 폴더 : $WorkDir"
 Write-Host "리포 폴더 : $RepoSyncDir"
+if ($Includes.Count -gt 0) {
+    Write-Host "동기화 대상 하위 폴더: $($Includes -join ', ')"
+} else {
+    Write-Host "동기화 대상 하위 폴더: (아직 없음 - 전체 목록과 루트 낱개 파일만 동기화)"
+}
 
 if (-not (Test-Path $WorkDir)) {
     New-Item -ItemType Directory -Force -Path $WorkDir -ErrorAction Stop | Out-Null
     Write-Host "* 작업 폴더가 없어서 새로 만들었습니다: $WorkDir" -ForegroundColor Yellow
 }
 
-$workFiles = (Get-ChildItem -Path $WorkDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
-Write-Host "작업 폴더 파일 수: $workFiles"
+Write-Host "작업 폴더 전체 파일 목록을 읽는 중... (파일이 많으면 시간이 걸립니다)"
+$allFiles  = @(Get-ChildItem -Path $WorkDir -Recurse -File -ErrorAction SilentlyContinue)
+$workFiles = $allFiles.Count
+$totalMB   = 0
+if ($workFiles -gt 0) {
+    $totalMB = [math]::Round(($allFiles | Measure-Object -Property Length -Sum).Sum / 1MB)
+}
+Write-Host "작업 폴더: 파일 $workFiles개, 약 ${totalMB}MB"
 Write-Host ""
 if ($workFiles -eq 0) {
     Write-Host "* 작업 폴더가 비어 있습니다! OPCG 작업 파일들이 위 경로에 있는 게 맞는지 확인하세요." -ForegroundColor Yellow
@@ -103,7 +137,7 @@ if ($workFiles -eq 0) {
 
 # 1) GitHub에서 최신 내용 받기
 if ($useGit) {
-    Write-Host "[1/4] GitHub에서 받는 중 (git pull)..."
+    Write-Host "[1/5] GitHub에서 받는 중 (git pull)..."
     git -C $RepoDir -c pull.rebase=false pull --no-edit
     if ($LASTEXITCODE -ne 0) {
         if (git -C $RepoDir ls-files -u) {
@@ -116,37 +150,81 @@ if ($useGit) {
     if (git -C $RepoDir ls-files -u) {
         Fail "리포지토리에 해결되지 않은 충돌이 있습니다. 리포 폴더에서 'git status' 결과를 Claude에게 보여주세요."
     }
+    # pull로 sync-include.txt가 갱신됐을 수 있으니 다시 읽기
+    if (Test-Path $IncludeFile) {
+        $Includes = @(Get-Content -Path $IncludeFile -Encoding UTF8 |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith("#") })
+    }
 } else {
-    Write-Host "[1/4] git pull 건너뜀"
+    Write-Host "[1/5] git pull 건너뜀"
 }
 
 # 2) 리포 -> 작업 폴더 (다른 곳에서 바뀐 파일 받기)
 if ($Mode -ne "push") {
-    Write-Host "[2/4] 리포 -> 작업 폴더 복사..."
-    Invoke-Robocopy $RepoSyncDir $WorkDir "리포 -> 작업 폴더"
+    Write-Host "[2/5] 리포 -> 작업 폴더 복사..."
+    Invoke-Robocopy $RepoSyncDir $WorkDir "리포 -> 작업 폴더(루트)" -ExtraOpts @("/XF", "_inventory.txt", ".gitkeep")
+    foreach ($inc in $Includes) {
+        Invoke-Robocopy (Join-Path $RepoSyncDir $inc) (Join-Path $WorkDir $inc) "리포 -> 작업 폴더($inc)" -Deep
+    }
 } else {
-    Write-Host "[2/4] 건너뜀 (push 모드)"
+    Write-Host "[2/5] 건너뜀 (push 모드)"
 }
 
 # 3) 작업 폴더 -> 리포 (이 컴퓨터에서 작업한 파일 보내기)
 if ($Mode -ne "pull") {
-    Write-Host "[3/4] 작업 폴더 -> 리포 복사..."
-    Invoke-Robocopy $WorkDir $RepoSyncDir "작업 폴더 -> 리포"
+    Write-Host "[3/5] 작업 폴더 -> 리포 복사..."
+    Invoke-Robocopy $WorkDir $RepoSyncDir "작업 폴더 -> 리포(루트)"
+    foreach ($inc in $Includes) {
+        Invoke-Robocopy (Join-Path $WorkDir $inc) (Join-Path $RepoSyncDir $inc) "작업 폴더 -> 리포($inc)" -Deep
+    }
 } else {
-    Write-Host "[3/4] 건너뜀 (pull 모드)"
+    Write-Host "[3/5] 건너뜀 (pull 모드)"
 }
 
-# 4) 변경분 commit & push
+# 4) 전체 파일 목록 만들기 (Claude가 보고 동기화 폴더를 고르는 용도)
+if ($Mode -ne "pull") {
+    Write-Host "[4/5] 전체 파일 목록(OPCG\_inventory.txt) 만드는 중..."
+    New-Item -ItemType Directory -Force -Path $RepoSyncDir -ErrorAction Stop | Out-Null
+    $invPath  = Join-Path $RepoSyncDir "_inventory.txt"
+    $stampNow = Get-Date -Format "yyyy-MM-dd HH:mm"
+    $header = @(
+        "# OPCG 작업 폴더 전체 파일 목록 (자동 생성: $stampNow)",
+        "# 작업 폴더: $WorkDir",
+        "# 파일 $workFiles개, 총 약 ${totalMB}MB",
+        "# 형식: 상대경로<TAB>크기(byte)"
+    )
+    $body = $allFiles | ForEach-Object {
+        "{0}`t{1}" -f $_.FullName.Substring($WorkDir.Length + 1), $_.Length
+    }
+    Set-Content -Path $invPath -Value ($header + $body) -Encoding UTF8
+} else {
+    Write-Host "[4/5] 건너뜀 (pull 모드)"
+}
+
+# 동기화 폴더 크기 확인 (GitHub 한계 예방)
+$syncMB = 0
+$syncSum = (Get-ChildItem -Path $RepoSyncDir -Recurse -File -ErrorAction SilentlyContinue |
+            Measure-Object -Property Length -Sum).Sum
+if ($syncSum) { $syncMB = [math]::Round($syncSum / 1MB) }
+Write-Host "리포에 올라갈 동기화 폴더 크기: 약 ${syncMB}MB"
+if ($syncMB -gt 1500) {
+    Fail ("동기화 대상이 너무 큽니다 (약 ${syncMB}MB). GitHub에 한 번에 올릴 수 있는 크기를 넘습니다.`n" +
+          "scripts\sync-include.txt의 폴더 목록을 줄여야 합니다. 이 내용을 Claude에게 알려주세요.")
+}
+
+# 5) 변경분 commit & push
 $pushedOk   = $false
 $hadChanges = $false
 $ahead      = 0
+$pushOut    = ""
 
 if ($useGit -and $Mode -ne "pull") {
-    Write-Host "[4/4] GitHub로 올리는 중 (commit & push)..."
+    Write-Host "[5/5] GitHub로 올리는 중 (commit & push)..."
     git -C $RepoDir add -A -- OPCG
     if ($LASTEXITCODE -ne 0) {
         Fail ("파일을 git에 추가(add)하지 못했습니다. 위쪽의 영어 오류 문구를 확인하세요.`n" +
-              "- 'Filename too long'이 보이면: 경로가 긴 파일 때문인데, 방금 설정을 자동으로 켰으니 이 스크립트를 한 번만 더 실행해보세요.`n" +
+              "- 'Filename too long'이 보이면: 경로가 긴 파일 때문인데, 설정을 자동으로 켰으니 이 스크립트를 한 번만 더 실행해보세요.`n" +
               "- 'Permission denied'가 보이면: 그 파일을 열어둔 프로그램을 닫고 다시 실행하세요.`n" +
               "- 그 외에는 이 창 내용을 Claude에게 붙여넣어 주세요.")
     }
@@ -179,15 +257,6 @@ if ($useGit -and $Mode -ne "pull") {
     if ($LASTEXITCODE -eq 0 -and $aheadRaw) { $ahead = [int]$aheadRaw }
     if ($ahead -gt 0) { Write-Host "  GitHub로 올릴 commit: $ahead개" }
 
-    $syncMB = 0
-    if (Test-Path $RepoSyncDir) {
-        $sum = (Get-ChildItem -Path $RepoSyncDir -Recurse -File -ErrorAction SilentlyContinue |
-                Measure-Object -Property Length -Sum).Sum
-        if ($sum) { $syncMB = [math]::Round($sum / 1MB) }
-    }
-    Write-Host "  올릴 폴더 크기: 약 ${syncMB}MB"
-
-    $pushOut = ""
     foreach ($delay in 0, 2, 4, 8, 16) {
         if ($delay -gt 0) {
             Write-Host "* push 실패 - ${delay}초 후 다시 시도합니다..." -ForegroundColor Yellow
@@ -198,9 +267,9 @@ if ($useGit -and $Mode -ne "pull") {
         if ($LASTEXITCODE -eq 0) { $pushedOk = $true; break }
     }
 } elseif ($Mode -eq "pull") {
-    Write-Host "[4/4] 건너뜀 (pull 모드)"
+    Write-Host "[5/5] 건너뜀 (pull 모드)"
 } else {
-    Write-Host "[4/4] git push 건너뜀 (-NoGit)"
+    Write-Host "[5/5] git push 건너뜀 (-NoGit)"
 }
 
 # ---- 최종 결과 ----
@@ -226,7 +295,7 @@ if ($Mode -eq "pull") {
                 "  로그인 창이 아예 안 뜨면 이 창 내용을 Claude에게 보여주세요.")
     } elseif ($pushOut -match "pack exceeds maximum|RPC failed|HTTP 408|HTTP 400|curl 55|curl 52|remote end hung up") {
         $why = ("- 원인: 한 번에 올리기엔 용량이 큰 것 같습니다 (올릴 크기 약 ${syncMB}MB).`n" +
-                "  Claude에게 '용량 때문에 push 실패, 약 ${syncMB}MB'라고 알려주세요. 나눠서 올리는 방법을 만들어줍니다.")
+                "  Claude에게 '용량 때문에 push 실패, 약 ${syncMB}MB'라고 알려주세요.")
     } elseif ($pushOut -match "non-fast-forward|fetch first|\[rejected\]") {
         $why = "- 원인: GitHub 쪽에 새 변경이 있어서입니다. 이 스크립트를 한 번 더 실행하면 받아서 합친 뒤 올라갑니다."
     }
