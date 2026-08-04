@@ -1,0 +1,544 @@
+-- OPCG rule entry points shared by Lua and the native turn/battle controller.
+opcg = opcg or {}
+opcg.rules = opcg.rules or {}
+local R = opcg.rules
+local EVENT_OPCG_POST_DRAW_SETUP = 0x1000f001
+local REDRAW_PROMPT_CARD = opcg.DON_DECK_HOST_ID or 879999998
+local ATTACH_DON_DESC = 1240
+local ATTACH_DON_FLAG = 0x7f4f1240
+
+local function is_attach_don_target(card, player)
+	return card and card:IsLocation(LOCATION_MZONE)
+		and card:GetControler() == player
+		and (opcg.IsLeader(card) or opcg.IsCharacter(card))
+end
+
+-- gframe/core may call this repeatedly during Main Phase. Giving DON is not a
+-- once-per-card ignition effect; any eligible cost-area DON can be given.
+function R.attach_don(player, target, count, state)
+	if not is_attach_don_target(target, player) then return 0 end
+	return opcg.GiveDon(player, target, count or 1, state)
+end
+
+-- Manual DON!! attach is modeled as a granted summon-procedure button on each
+-- legal leader/character. The procedure's operation gives DON and deliberately
+-- leaves the summon group empty, so no Special Summon is actually performed.
+function R.register_attach_don_grant(host)
+	if not host or not host.RegisterEffect then return end
+	if host.GetFlagEffect and host:GetFlagEffect(ATTACH_DON_FLAG) > 0 then return end
+	if host.RegisterFlagEffect then
+		host:RegisterFlagEffect(ATTACH_DON_FLAG, 0, 0, 1)
+	end
+
+	local proc = Effect.CreateEffect(host)
+	proc:SetType(EFFECT_TYPE_FIELD)
+	proc:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+	proc:SetCode(EFFECT_SPSUMMON_PROC_G)
+	proc:SetRange(LOCATION_MZONE)
+	proc:SetDescription(ATTACH_DON_DESC)
+	proc:SetCondition(function(e, c)
+		return opcg.ActiveDon(e:GetHandlerPlayer()) > 0
+	end)
+	proc:SetOperation(function(e, tp, eg, ep, ev, re, r, rp)
+		local target = e:GetHandler()
+		local player = tp
+		if is_attach_don_target(target, player) then
+			opcg.GiveDon(player, target, 1, "ACTIVE")
+		end
+	end)
+
+	local grant = Effect.CreateEffect(host)
+	grant:SetType(EFFECT_TYPE_FIELD + EFFECT_TYPE_GRANT)
+	grant:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+	grant:SetRange(LOCATION_SZONE)
+	grant:SetTargetRange(LOCATION_MZONE, 0)
+	grant:SetLabelObject(proc)
+	Duel.RegisterEffect(grant,host:GetOwner())
+end
+
+function R.damage_leader(player, amount, context)
+	return opcg.life.damage_leader(player, amount or 1, context)
+end
+
+function R.resolve_attack(attacker, target, context)
+	return opcg.battle.resolve_attack(attacker, target, context)
+end
+
+-- Native OPCG turn structure calls these at non-chain rule boundaries.
+function R.refresh_phase(player)
+	local cards = Duel.GetMatchingGroup(function(c)
+		return (opcg.IsLeader(c) or opcg.IsCharacter(c) or opcg.IsStage(c))
+			and c:GetControler() == player and opcg.IsRested(c)
+	end, player, LOCATION_MZONE + LOCATION_FZONE, 0, nil)
+	for card in aux.Next(cards) do opcg.SetActive(card) end
+	return opcg.RefreshDon(player)
+end
+function R.don_phase(player)
+	local starting_don = opcg._turn_state and opcg._turn_state.field_don_at_start
+		or opcg.FieldDon(player)
+	local added = opcg.DonPhase(player)
+	-- redirect effects act on DON *being placed this phase* (놓이는 둥):
+	-- with the DON deck dry (added == 0) there is nothing to redirect, and
+	-- redirects can never exceed what was actually placed.
+	local redirectable = added
+	if redirectable > 0 and Duel.IsPlayerAffectedByEffect and opcg.EFFECT_DON_PHASE_ATTACH then
+		for _, effect in ipairs({Duel.IsPlayerAffectedByEffect(player, opcg.EFFECT_DON_PHASE_ATTACH)}) do
+			local action = opcg.GetEffectValue(effect)
+			local leader = opcg.GetLeader(player)
+			if leader and type(action) == "table" and redirectable > 0 then
+				local context = {
+					card=effect:GetHandler(), player=player,
+					field_don_snapshot=starting_don,
+				}
+				local allowed = true
+				for _, condition in ipairs(action.conditions or {}) do
+					if not OPCGCore.CheckCondition(condition.op, condition, context) then allowed = false break end
+				end
+				if allowed then
+					local given = opcg.GiveDon(player, leader,
+						math.min(action.count or 1, redirectable), "ACTIVE")
+					redirectable = redirectable - given
+				end
+			end
+		end
+	end
+	return added
+end
+
+-- The native leave-field redirect must call this before ordinary overlay disposal.
+function R.before_battler_leaves(card)
+	return opcg.ReturnAttachedDon(card)
+end
+
+-- OPCG stages are PLAYED: rest cost-N active DON, then the card goes face-up
+-- onto the stage zone (an old stage is trashed by the core's replace rule).
+-- EFFECT_TYPE_ACTIVATE is the only stock path that places a spell face-up from
+-- hand, so it is the carrier -- there is no YGO "activation" flavor beyond it.
+-- Called per stage card from C.BindCard.
+function R.register_stage_play(card)
+	local e = Effect.CreateEffect(card)
+	e:SetType(EFFECT_TYPE_ACTIVATE)
+	e:SetCode(EVENT_FREE_CHAIN)
+	e:SetCost(function(ce, tp, eg, ep, ev, re, r, rp, chk)
+		local cost = opcg.GetCost(ce:GetHandler())
+		if chk == 0 then return opcg.CanRestDon(tp, cost) end
+		opcg.RestDon(tp, cost)
+	end)
+	e:SetOperation(function(ce, tp)
+		local card = ce:GetHandler()
+		if opcg.EmitPlayed then
+			opcg.EmitPlayed(card, tp, {
+				played_card=card,
+				played_player=tp,
+				event_target=card,
+				event_targets={card},
+				event_cards={card},
+				event_count=1,
+				event_player=tp,
+			})
+		end
+	end)
+	card:RegisterEffect(e)
+end
+
+R._game_start_guard = R._game_start_guard or {}
+local game_start_guard = R._game_start_guard
+local function dispatch_game_start(player)
+	if not (OPCGCore and OPCGCore.DispatchTiming) then return end
+	local leader = opcg.GetLeader(player)
+	if not leader then return end
+	OPCGCore.DispatchTiming(leader, "GAME_START", {
+		card=leader, player=player, event_player=player,
+		event_target=leader, event_targets={leader}, event_cards={leader}, event_count=1,
+	})
+end
+function R.register_game_start()
+	if not (aux and aux.GlobalCheck and Effect and Effect.GlobalEffect) then return end
+	if R._game_start_registered then return end
+	R._game_start_registered = true
+	aux.GlobalCheck(game_start_guard, function()
+		local startup_done = {}
+		local game_start_done = {}
+		local startup = Effect.GlobalEffect()
+		startup:SetType(EFFECT_TYPE_FIELD + EFFECT_TYPE_CONTINUOUS)
+		startup:SetCode(EVENT_STARTUP)
+		startup:SetOperation(function()
+			-- [원설계] Under DUEL_OPCG_SCRIPTED_RPS the network SELECT_HAND/TP
+			-- handshake is a fast-forwarded formality: the REAL rock-paper-
+			-- scissors runs HERE, official-sequence style — leaders start
+			-- REVEALED (리더 보고 시작), then the RPS winner picks first/second
+			-- (Duel.SetTurnPlayer, honored by the core Startup processor).
+			-- Without the flag (headless harnesses, solo) turn order stays
+			-- as given.
+			local scripted_rps = Duel.IsDuelType
+				and Duel.IsDuelType(0x4000000000) or false
+			for _, player in ipairs({ 0, 1 }) do
+				if not startup_done[player] then
+					startup_done[player] = true
+					-- 리더 배치가 둥!! 충전보다 먼저다(공식: 리더 보고 시작).
+					-- DON_DECK_SIZE 상주(에넬 OP15-058)는 리더가 MZONE에 있어야
+					-- 보이므로, 순서가 뒤집히면 GetDonMax가 기본 10으로 읽혀
+					-- 둥!! 덱이 10장으로 차 버린다.
+					if not opcg.GetLeader(player) then
+						local leader = Duel.GetMatchingGroup(opcg.IsLeader, player,
+							LOCATION_DECK + LOCATION_EXTRA, 0, nil):GetFirst()
+						if leader then
+							-- leaders are PUBLIC from the start — the scripted
+							-- RPS only decides turn order
+							Duel.MoveToField(leader, player, player, LOCATION_MZONE,
+								POS_FACEUP_ATTACK,
+								true, 1 << opcg.zone.LEADER.seq)
+						end
+					end
+					-- Hosts and all physical DON exist before any opening setup
+					-- continues. The v1 monster-click attach (SPSUMMON_PROC_G
+					-- grant) is superseded by the per-DON ignition; granting it
+					-- would put a phantom summon command on every leader/character.
+					opcg.SetupDonHosts(player)
+				end
+			end
+			if scripted_rps and not R._rps_done then
+				R._rps_done = true
+				-- the REAL simultaneous RPS (MSG_ROCK_PAPER_SCISSORS 132 +
+				-- MSG_HAND_RES 133, native client hand dialog); repeats on ties
+				local winner = Duel.RockPaperScissors(true)
+				-- stock system strings 100/101 ("Go first"/"Go second") —
+				-- built into every client's strings.conf, immune to cdb state
+				local go_first = Duel.SelectOption(winner, 100, 101) == 0
+				Duel.SetTurnPlayer(go_first and winner or 1 - winner)
+			end
+			for _, player in ipairs({ 0, 1 }) do
+				if startup_done[player] and not game_start_done[player] then
+					game_start_done[player] = true
+					dispatch_game_start(player)
+				end
+			end
+			-- Opening draw completes in the native Startup processor; the custom
+			-- post-draw event below then handles redraw and ordered life setup.
+		end)
+		Duel.RegisterEffect(startup, 0)
+
+		local setup = Effect.GlobalEffect()
+		setup:SetType(EFFECT_TYPE_FIELD + EFFECT_TYPE_CONTINUOUS)
+		setup:SetCode(EVENT_OPCG_POST_DRAW_SETUP)
+		setup:SetOperation(function()
+			for _, player in ipairs({ 0, 1 }) do
+				if Duel.SelectYesNo(player, aux.Stringid(REDRAW_PROMPT_CARD, 0)) then
+					local hand = Duel.GetFieldGroup(player, LOCATION_HAND, 0)
+					Duel.SendtoDeck(hand, nil, SEQ_DECKSHUFFLE, REASON_RULE)
+					Duel.ShuffleDeck(player)
+					Duel.Draw(player, 5, REASON_RULE)
+				end
+			end
+			for _, player in ipairs({ 0, 1 }) do
+				local leader = opcg.GetLeader(player)
+				local life = leader and leader:GetLevel() or 0
+				for _ = 1, life do
+					local top = Duel.GetDecktopGroup(player, 1)
+					if top:GetCount() == 0 then break end
+					-- Repeated one-card moves preserve the official order:
+					-- the original deck top becomes the bottom life.
+					Duel.Sendto(top, LOCATION_EXTRA, REASON_RULE,
+						POS_FACEDOWN_DEFENSE, player, 0)
+				end
+			end
+		end)
+		Duel.RegisterEffect(setup, 0)
+
+		local refresh = Effect.GlobalEffect()
+		refresh:SetType(EFFECT_TYPE_FIELD + EFFECT_TYPE_CONTINUOUS)
+		refresh:SetCode(EVENT_PHASE_START + PHASE_DRAW)
+		refresh:SetOperation(function()
+			local player = Duel.GetTurnPlayer()
+			opcg._turn_state = {
+				life_trigger_activated=false,
+				field_don_at_start=opcg.FieldDon(player),
+			}
+			R.refresh_phase(player)
+			if opcg.contract_ops then opcg.contract_ops.emit("YOUR_TURN_START",
+				{player=player, event_player=player}, player) end
+		end)
+		Duel.RegisterEffect(refresh, 0)
+
+		local don_phase = Effect.GlobalEffect()
+		don_phase:SetType(EFFECT_TYPE_FIELD + EFFECT_TYPE_CONTINUOUS)
+		don_phase:SetCode(EVENT_PHASE_START + PHASE_STANDBY)
+		don_phase:SetOperation(function()
+			R.don_phase(Duel.GetTurnPlayer())
+		end)
+		Duel.RegisterEffect(don_phase, 0)
+
+		-- Playing a character IS the normal summon, but its cost is DON: a global
+		-- EFFECT_LIMIT_SUMMON_PROC replaces the whole YGO summon/tribute procedure
+		-- with "rest cost-N active DON, then place". card::filter_summon_procedure
+		-- collects field auras too, so one effect covers every character in hand.
+		local play_proc = Effect.GlobalEffect()
+		play_proc:SetType(EFFECT_TYPE_FIELD)
+		play_proc:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		play_proc:SetCode(EFFECT_LIMIT_SUMMON_PROC)
+		play_proc:SetTargetRange(LOCATION_HAND, LOCATION_HAND)
+		-- NO SetTarget here: on summon-proc effects the target slot is the
+		-- tribute-selection callback, invoked as (e,tp,eg,ep,ev,re,r,rp,c,...)
+		-- (operations.cpp SummonRule case 4) -- a 2-arg aura filter there gets
+		-- tp as its card and crashes. Kind filtering lives in the condition.
+		local function own_field_character(fc, tp)
+			return opcg.IsCharacter(fc) and fc:GetControler() == tp
+		end
+		play_proc:SetCondition(function(e, c)
+			-- c == nil is the effect-availability probe, not a summon check.
+			if c == nil then return true end
+			if not opcg.IsCharacter(c) then return false end
+			local tp = c:GetControler()
+			if opcg.contract_ops and opcg.contract_ops.player_has
+				and opcg.contract_ops.player_has(tp, opcg.EFFECT_CANNOT_PLAY, c) then return false end
+			local cost = opcg.EffectivePlayCost and opcg.EffectivePlayCost(c, tp) or opcg.GetCost(c)
+			if not opcg.CanRestDon(tp, cost) then return false end
+			if Duel.GetLocationCount(tp, LOCATION_MZONE) > 0 then return true end
+			-- full character area: the official rule still allows the play by
+			-- trashing one of your characters to open the slot
+			return Duel.IsExistingMatchingCard(own_field_character, tp,
+				LOCATION_MZONE, 0, 1, nil, tp)
+		end)
+		play_proc:SetOperation(function(e, tp, eg, ep, ev, re, r, rp, c)
+			local cost = opcg.EffectivePlayCost and opcg.EffectivePlayCost(c, tp) or opcg.GetCost(c)
+			opcg.RestDon(tp, cost)
+			if opcg.ConsumePlayDiscounts then opcg.ConsumePlayDiscounts(c, tp) end
+			if Duel.GetLocationCount(tp, LOCATION_MZONE) <= 0 then
+				-- 풀필드 등장: trash 1 own character to make room. This is a
+				-- RULE placement, deliberately NOT a K.O. (REASON_RULE, no
+				-- destroy): [KO시] must stay silent and KO replacements must
+				-- not trigger on the pushed-out character.
+				Duel.Hint(HINT_SELECTMSG, tp, HINTMSG_TOGRAVE)
+				local victim = Duel.SelectMatchingCard(tp, own_field_character,
+					tp, LOCATION_MZONE, 0, 1, 1, nil, tp)
+				if victim and victim:GetCount() > 0 then
+					Duel.SendtoGrave(victim, REASON_RULE)
+				end
+			end
+		end)
+		play_proc:SetValue(SUMMON_TYPE_NORMAL)
+		Duel.RegisterEffect(play_proc, 0)
+
+		-- [OPCG] 코스트 0 개방 (2026-07-18, "0코스트 안 됨" 제보). 코어
+		-- get_level은 몬스터 프레임의 레벨<1을 1로 강제한다(card.cpp:
+		-- level<1 && TYPE_MONSTER && !EFFECT_ALLOW_NEGATIVE → 1). OPCG는
+		-- 코스트=레벨이고 MODIFY_COST가 EFFECT_UPDATE_LEVEL을 타므로,
+		-- "코스트를 0으로" 감소가 1에서 바닥에 걸리고 코스트0 판정 필터도
+		-- 영영 거짓이 된다. 코어의 허용 문구(EFFECT_ALLOW_NEGATIVE)로 클램프를
+		-- 열되, 마이너스는 애초에 허용하지 않는다(유저 재정) — 감소 효과의
+		-- 값 함수가 소스에서 클램프한다(opcg_core modify_stat / contract_ops
+		-- MODIFY_HAND/NEXT_PLAY_COST). ※시작 시 등록하는 CHANGE_LEVEL_FINAL
+		-- 바닥은 채택 불가 — filter_effect가 효과 id순 정렬이라 나중에 붙는
+		-- 감소 효과보다 먼저 평가돼 불발(실측).
+		local allow_zero = Effect.GlobalEffect()
+		allow_zero:SetType(EFFECT_TYPE_FIELD)
+		allow_zero:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE
+			+ EFFECT_FLAG_IGNORE_IMMUNE)
+		allow_zero:SetCode(EFFECT_ALLOW_NEGATIVE)
+		allow_zero:SetTargetRange(0xff, 0xff)
+		Duel.RegisterEffect(allow_zero, 0)
+
+		-- ===== 네이티브 배틀 심판 심(정적 판정 레이어, 2026-07-12) =====
+		-- 어택이 네이티브 배틀 머신(idle t=9 → BattleCommand)을 타는 구조에서
+		-- 스톡 YGO 심판을 OPCG 룰로 교정하는 '오라' 레이어. 이벤트 진행형
+		-- 스텝(선언 레스트·어택 코스트/블록/카운터/리더 라이프/KO 디스패치/
+		-- 배틀 종료 경계)은 opcg_battle.lua의 네이티브 훅이 담당한다
+		-- (구 심 a·3c·3d 이관). 판정의 코어 이관이 완성되면 통째로 은퇴한다.
+		if opcg.battle and opcg.battle.install then opcg.battle.install() end
+		-- (b) 레스트(수비표시)여도 어택이 취소되지 않게 — processor:5104의
+		-- POS_DEFENSE 취소 검사 면제. value=0(거짓) = 판정 스탯은 수비력으로
+		-- 치환하지 않고 공격력 유지(3021행 게이트).
+		local defense_attack = Effect.GlobalEffect()
+		defense_attack:SetType(EFFECT_TYPE_FIELD)
+		defense_attack:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		defense_attack:SetCode(EFFECT_DEFENSE_ATTACK)
+		defense_attack:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		defense_attack:SetValue(0)
+		Duel.RegisterEffect(defense_attack, 0)
+		-- (c) 어택 선언 제약 일체(구 can_declare 이식): ①레스트 선언 불가
+		-- ((b)의 전역 부여 부작용 봉쇄) ②개인 첫 턴(선공 턴1·후공 턴2) 전면
+		-- 금지 ③등장턴 캐릭터 병(속공·허용효과 예외).
+		local declare_rules = Effect.GlobalEffect()
+		declare_rules:SetType(EFFECT_TYPE_FIELD)
+		declare_rules:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		declare_rules:SetCode(EFFECT_CANNOT_ATTACK)
+		declare_rules:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		declare_rules:SetTarget(function(_, c)
+			-- 현행 공격자는 면제: 선언 시 레스트되므로(심 a) 이 오라가 자기
+			-- 어택을 사살하지 않게 (5087 is_capable_attack 재검사 대응)
+			if c == Duel.GetAttacker() then return false end
+			if opcg.IsRested(c) then return true end
+			-- 개인 첫 턴 어택 금지 (공식룰: 선공·후공 모두 자기 첫 턴 공격 불가).
+			-- personal_turn_count = Duel.GetTurnCount(player) 이 개인 턴수.
+			if Duel.GetTurnCount() <= 2 then return true end
+			-- 등장턴 캐릭터 병 (리더 제외, RUSH·허용효과 예외)
+			if opcg.IsCharacter(c) and c.GetTurnID
+				and c:GetTurnID() == Duel.GetTurnCount()
+				and not opcg.HasKeyword(c, "RUSH")
+				and not c:IsHasEffect(opcg.EFFECT_ALLOW_ATTACK_CHARACTER) then
+				return true
+			end
+			-- 어택 코스트(손패 버리기 강제)를 낼 수 없으면 선언 불가
+			-- (지불 자체는 opcg_battle의 announce 훅이 집행)
+			local battle = opcg.battle
+			if battle and battle.required_attack_discard then
+				local required = battle.required_attack_discard(c, c:GetControler())
+				if required > 0 and Duel.GetFieldGroupCount(c:GetControler(), LOCATION_HAND, 0) < required then
+					return true
+				end
+			end
+			return false
+		end)
+		Duel.RegisterEffect(declare_rules, 0)
+		-- (c2) 분류군: 등장턴 캐릭터 한정 어택 허가(EFFECT_ALLOW_ATTACK_CHARACTER)
+		-- — "등장한 턴에 캐릭터에게 어택할 수 있다"(OP14-090 Mr.1, OP04-096
+		-- 콜로세움류)는 (c)의 등장턴 병만 면제할 뿐 대상 제한이 없어 리더까지
+		-- 때려졌다(유저 제보·분류군 신설 지시 2026-07-27). 허용효과'만'으로
+		-- 공격 가능한 등장턴 캐릭터에는 리더를 어택 대상에서 제외하는 제한을
+		-- 태운다(속공 보유자는 전면 허가라 제외). 코어 문법: 제한 효과는
+		-- 어택커에 탑승(TargetRange+Target), value가 후보 심사(true=제외).
+		local rush_char_limit = Effect.GlobalEffect()
+		rush_char_limit:SetType(EFFECT_TYPE_FIELD)
+		rush_char_limit:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		rush_char_limit:SetCode(EFFECT_CANNOT_SELECT_BATTLE_TARGET)
+		rush_char_limit:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		rush_char_limit:SetTarget(function(_, c)
+			return opcg.IsCharacter(c) and c.GetTurnID
+				and c:GetTurnID() == Duel.GetTurnCount()
+				and not opcg.HasKeyword(c, "RUSH")
+				and c:IsHasEffect(opcg.EFFECT_ALLOW_ATTACK_CHARACTER)
+		end)
+		rush_char_limit:SetValue(function(_, target)
+			return target ~= nil and opcg.IsLeader(target)
+		end)
+		Duel.RegisterEffect(rush_char_limit, 0)
+		-- (d) 공격자와 리더는 전투로 파괴되지 않음 (동률 상호자폭 차단 + 리더 특례)
+		local battle_immune = Effect.GlobalEffect()
+		battle_immune:SetType(EFFECT_TYPE_FIELD)
+		battle_immune:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		battle_immune:SetCode(EFFECT_INDESTRUCTABLE_BATTLE)
+		battle_immune:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		battle_immune:SetTarget(function(_, c)
+			return c == Duel.GetAttacker() or opcg.IsLeader(c)
+		end)
+		battle_immune:SetValue(1)
+		Duel.RegisterEffect(battle_immune, 0)
+		-- [검산 보완 3종]
+		-- (1)+(2) 판정 스탯 통일: 양측 모두 '파워(공격력)'로 비교하고, 공격자에
+		-- +1을 줘서 '이상이면 KO'(동률 KO)를 스톡의 '초과 파괴' 분기로 관철.
+		-- (수비표시 타겟 분기는 동률 무파괴라 +1이 유일한 무개조 우회.
+		--  표시 파워에는 영향 없음 — 전투 판정 전용 스탯.)
+		local battle_stat = Effect.GlobalEffect()
+		battle_stat:SetType(EFFECT_TYPE_FIELD)
+		battle_stat:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		battle_stat:SetCode(EFFECT_CHANGE_BATTLE_STAT)
+		battle_stat:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		battle_stat:SetValue(function(_, c)
+			if c == Duel.GetAttacker() then return c:GetAttack() + 1 end
+			return c:GetAttack()
+		end)
+		Duel.RegisterEffect(battle_stat, 0)
+		-- (3a) 전투 데미지는 LP에 반영 금지 — 코어 LP로 승패가 나면 안 됨
+		local no_lp_damage = Effect.GlobalEffect()
+		no_lp_damage:SetType(EFFECT_TYPE_FIELD)
+		no_lp_damage:SetProperty(EFFECT_FLAG_PLAYER_TARGET + EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		no_lp_damage:SetCode(EFFECT_AVOID_BATTLE_DAMAGE)
+		no_lp_damage:SetTargetRange(1, 1)
+		no_lp_damage:SetValue(1)
+		Duel.RegisterEffect(no_lp_damage, 0)
+		-- (3b) 타겟 적법성: 액티브 캐릭터는 피어택 불가 (레스트 캐릭터·리더만 유효)
+		local active_untargetable = Effect.GlobalEffect()
+		active_untargetable:SetType(EFFECT_TYPE_FIELD)
+		active_untargetable:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		active_untargetable:SetCode(EFFECT_CANNOT_BE_BATTLE_TARGET)
+		-- 양측 모두: 방향 비대칭((0, MZONE) = 상대 존만)이면 반대편 공격에서
+		-- 자기 액티브 캐릭터가 타겟으로 노출된다 (07-13 yrp 합성이 검출한 실버그)
+		active_untargetable:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		active_untargetable:SetTarget(function(_, c)
+			return opcg.IsCharacter(c) and not opcg.IsRested(c)
+		end)
+		active_untargetable:SetValue(1)
+		Duel.RegisterEffect(active_untargetable, 0)
+		-- (3c) 리더 피격 판정과 (3d) 배틀 경계 배수는 opcg_battle.lua의
+		-- EVENT_BATTLED / EVENT_DAMAGE_STEP_END 훅으로 이관(확장 포함:
+		-- 더블어택·바니시·ON_DAMAGE_TO_OPPONENT_LIFE·KO 디스패치·경계 배수).
+		-- ===== 심 끝 =====
+
+		local rested_play = Effect.GlobalEffect()
+		rested_play:SetType(EFFECT_TYPE_FIELD + EFFECT_TYPE_CONTINUOUS)
+		rested_play:SetCode(EVENT_SUMMON_SUCCESS)
+		rested_play:SetOperation(function(_, _, group)
+			if not group then return end
+			for card in aux.Next(group) do
+				local player = card:GetControler()
+				if opcg.IsCharacter(card) and opcg.contract_ops
+					and opcg.contract_ops.player_has(player, opcg.EFFECT_PLAY_RESTED, card) then
+					opcg.SetRested(card)
+				end
+				if opcg.IsCharacter(card) and opcg.EmitPlayed then
+					opcg.EmitPlayed(card, player, {
+						played_card=card,
+						played_player=player,
+						event_target=card,
+						event_targets={card},
+						event_cards={card},
+						event_count=1,
+						event_player=player,
+					})
+				end
+			end
+		end)
+		Duel.RegisterEffect(rested_play, 0)
+
+		-- OPCG has no face-down set; close the free MSET path outright.
+		local no_set = Effect.GlobalEffect()
+		no_set:SetType(EFFECT_TYPE_FIELD)
+		no_set:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		no_set:SetCode(EFFECT_LIMIT_SET_PROC)
+		no_set:SetTargetRange(LOCATION_HAND, LOCATION_HAND)
+		-- (same target-slot caveat as play_proc; condition alone blocks the set)
+		no_set:SetCondition(function(e, c) return c == nil end)
+		Duel.RegisterEffect(no_set, 0)
+
+		-- ...and no face-down spells either: stages are played via
+		-- register_stage_play, events resolve from hand. (CANNOT_SSET is a plain
+		-- card aura -- is_affected_by_effect -- so a 2-arg target is safe here.)
+		local no_sset = Effect.GlobalEffect()
+		no_sset:SetType(EFFECT_TYPE_FIELD)
+		no_sset:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		no_sset:SetCode(EFFECT_CANNOT_SSET)
+		no_sset:SetTargetRange(LOCATION_HAND, LOCATION_HAND)
+		no_sset:SetTarget(function(e, c) return opcg.IsStage(c) or opcg.IsEvent(c) end)
+		Duel.RegisterEffect(no_sset, 0)
+		
+		local extra_attack = Effect.GlobalEffect()
+		extra_attack:SetType(EFFECT_TYPE_FIELD)
+		extra_attack:SetProperty(EFFECT_FLAG_CANNOT_DISABLE + EFFECT_FLAG_UNCOPYABLE)
+		extra_attack:SetCode(EFFECT_EXTRA_ATTACK)
+		extra_attack:SetTargetRange(LOCATION_MZONE, LOCATION_MZONE)
+		extra_attack:SetValue(999999999)
+		Duel.RegisterEffect(extra_attack, 0)
+
+		-- OPCG has no hand size limit: lift the YGO end-phase discard cap
+		-- (processor.cpp EP adjust reads the LAST EFFECT_HAND_LIMIT value).
+		local no_hand_cap = Effect.GlobalEffect()
+		no_hand_cap:SetType(EFFECT_TYPE_FIELD)
+		no_hand_cap:SetProperty(EFFECT_FLAG_PLAYER_TARGET + EFFECT_FLAG_CANNOT_DISABLE)
+		no_hand_cap:SetCode(EFFECT_HAND_LIMIT)
+		no_hand_cap:SetTargetRange(1, 1)
+		no_hand_cap:SetValue(99)
+		Duel.RegisterEffect(no_hand_cap, 0)
+
+		-- Any number of characters may be played per turn (DON permitting);
+		-- lift the YGO one-normal-summon-per-turn count.
+		local free_count = Effect.GlobalEffect()
+		free_count:SetType(EFFECT_TYPE_FIELD)
+		free_count:SetProperty(EFFECT_FLAG_PLAYER_TARGET + EFFECT_FLAG_CANNOT_DISABLE)
+		free_count:SetCode(EFFECT_SET_SUMMON_COUNT_LIMIT)
+		free_count:SetTargetRange(1, 1)
+		free_count:SetValue(99)
+		Duel.RegisterEffect(free_count, 0)
+	end)
+end
+
+return opcg.rules

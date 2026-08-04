@@ -1,0 +1,14 @@
+{
+  "source_root": "C:\\Users\\fatal\\proj\\edopcg_CODEX_INTEGRATED_20260701_FINAL_EDIT_BY_CLAUDE_FABLE",
+  "source_cdb_sha256": "461379CAEB40C32E68D09DE246BA1F063B42FF1D2F07066DA8A68B896BDE8B8B",
+  "expanded_cdb_sha256": "2A25E689D9C50358509439C6E090E1B4F0351FB46560C893F2827CCFE43384F3",
+  "expanded_cdb_size": 1486848,
+  "counts": {
+    "rule_cards": 2005,
+    "printings": 2556,
+    "additional_printings": 551,
+    "cdb_rows_with_system_cards": 2559,
+    "wrapper_scripts": 551
+  },
+  "image_copies_materialized": false
+}
