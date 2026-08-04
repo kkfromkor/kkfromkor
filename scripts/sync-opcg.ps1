@@ -137,6 +137,18 @@ if ($workFiles -eq 0) {
 
 # 1) GitHub에서 최신 내용 받기
 if ($useGit) {
+    # 이전 전체 동기화 시도가 리포 폴더에 남긴 대용량 사본/commit 정리
+    # (작업 폴더 원본은 건드리지 않음 - 리포 쪽 OPCG는 어차피 복사본)
+    $repoOpcgSum = (Get-ChildItem -Path $RepoSyncDir -Recurse -File -ErrorAction SilentlyContinue |
+                    Measure-Object -Property Length -Sum).Sum
+    if ($repoOpcgSum -and ([math]::Round($repoOpcgSum / 1MB) -gt 1500)) {
+        Write-Host "* 이전 시도가 리포 폴더에 남긴 대용량 사본을 정리합니다. 몇 분 걸릴 수 있습니다..." -ForegroundColor Yellow
+        git -C $RepoDir reset --hard "@{u}"
+        git -C $RepoDir clean -fd -- OPCG
+        git -C $RepoDir reflog expire --expire=now --all
+        git -C $RepoDir gc --prune=now
+        Write-Host "* 정리 완료. 계속 진행합니다." -ForegroundColor Yellow
+    }
     Write-Host "[1/5] GitHub에서 받는 중 (git pull)..."
     git -C $RepoDir -c pull.rebase=false pull --no-edit
     if ($LASTEXITCODE -ne 0) {
