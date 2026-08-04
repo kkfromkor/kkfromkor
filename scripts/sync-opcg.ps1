@@ -99,12 +99,24 @@ function Invoke-Robocopy {
 }
 
 # 동기화할 하위 폴더 목록 읽기
-$Includes = @()
-if (Test-Path $IncludeFile) {
-    $Includes = @(Get-Content -Path $IncludeFile -Encoding UTF8 |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -and -not $_.StartsWith("#") })
+#   일반 항목: 양방향 동기화
+#   "pull:" 접두사 항목: 받기 전용 (리포 -> 작업 폴더만, PC 파일은 업로드 안 함)
+function Read-SyncIncludes {
+    $script:Includes = @()
+    $script:PullOnly = @()
+    if (Test-Path $IncludeFile) {
+        foreach ($line in Get-Content -Path $IncludeFile -Encoding UTF8) {
+            $t = "$line".Trim()
+            if (-not $t -or $t.StartsWith("#")) { continue }
+            if ($t.ToLower().StartsWith("pull:")) {
+                $script:PullOnly += $t.Substring(5).Trim()
+            } else {
+                $script:Includes += $t
+            }
+        }
+    }
 }
+Read-SyncIncludes
 
 Write-Host ""
 Write-Host "=== OPCG 동기화 시작 (모드: $Mode) ==="
@@ -114,6 +126,9 @@ if ($Includes.Count -gt 0) {
     Write-Host "동기화 대상 하위 폴더: $($Includes -join ', ')"
 } else {
     Write-Host "동기화 대상 하위 폴더: (아직 없음 - 전체 목록과 루트 낱개 파일만 동기화)"
+}
+if ($PullOnly.Count -gt 0) {
+    Write-Host "받기 전용 폴더: $($PullOnly -join ', ')"
 }
 
 if (-not (Test-Path $WorkDir)) {
@@ -163,11 +178,7 @@ if ($useGit) {
         Fail "리포지토리에 해결되지 않은 충돌이 있습니다. 리포 폴더에서 'git status' 결과를 Claude에게 보여주세요."
     }
     # pull로 sync-include.txt가 갱신됐을 수 있으니 다시 읽기
-    if (Test-Path $IncludeFile) {
-        $Includes = @(Get-Content -Path $IncludeFile -Encoding UTF8 |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -and -not $_.StartsWith("#") })
-    }
+    Read-SyncIncludes
 } else {
     Write-Host "[1/5] git pull 건너뜀"
 }
@@ -176,7 +187,7 @@ if ($useGit) {
 if ($Mode -ne "push") {
     Write-Host "[2/5] 리포 -> 작업 폴더 복사..."
     Invoke-Robocopy $RepoSyncDir $WorkDir "리포 -> 작업 폴더(루트)" -ExtraOpts @("/XF", "_inventory.txt", ".gitkeep")
-    foreach ($inc in $Includes) {
+    foreach ($inc in ($Includes + $PullOnly)) {
         Invoke-Robocopy (Join-Path $RepoSyncDir $inc) (Join-Path $WorkDir $inc) "리포 -> 작업 폴더($inc)" -Deep
     }
 } else {

@@ -1,7 +1,10 @@
 # 여기에 적힌 OPCG 하위 폴더만 동기화됩니다. (한 줄에 하나, OPCG 기준 상대 경로)
+# "pull:" 접두사를 붙이면 받기 전용: 리포 -> 작업 폴더로만 복사되고,
+#   PC 쪽 파일은 GitHub로 올라가지 않습니다 (대용량 폴더에 새 파일만 내려줄 때 사용).
 # 이 목록은 Claude가 _inventory.txt를 보고 관리합니다.
-# 현재: st30 작업에 필요한 핵심 폴더 (합계 약 19MB)
+# 현재: st30 작업에 필요한 핵심 폴더 (합계 약 19MB) + 카드 이미지 받기 전용
 rev28_work\windows_source\opcg_data
 rev28_work\windows_source\tools
 rev28_work\windows_source\cdb_backups
 rev28_work\windows_source\bin\release\expansions
+pull:rev28_work\windows_source\bin\release\pics
