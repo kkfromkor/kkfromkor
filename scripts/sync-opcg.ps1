@@ -128,7 +128,7 @@ $totalMB   = 0
 if ($workFiles -gt 0) {
     $totalMB = [math]::Round(($allFiles | Measure-Object -Property Length -Sum).Sum / 1MB)
 }
-Write-Host "작업 폴더: 파일 $workFiles개, 약 ${totalMB}MB"
+Write-Host "작업 폴더: 파일 ${workFiles}개, 약 ${totalMB}MB"
 Write-Host ""
 if ($workFiles -eq 0) {
     Write-Host "* 작업 폴더가 비어 있습니다! OPCG 작업 파일들이 위 경로에 있는 게 맞는지 확인하세요." -ForegroundColor Yellow
@@ -203,7 +203,7 @@ if ($Mode -ne "pull") {
     $header = @(
         "# OPCG 작업 폴더 전체 파일 목록 (자동 생성: $stampNow)",
         "# 작업 폴더: $WorkDir",
-        "# 파일 $workFiles개, 총 약 ${totalMB}MB",
+        "# 파일 ${workFiles}개, 총 약 ${totalMB}MB",
         "# 형식: 상대경로<TAB>크기(byte)"
     )
     $body = $allFiles | ForEach-Object {
@@ -255,7 +255,7 @@ if ($useGit -and $Mode -ne "pull") {
             Fail "commit에 실패했습니다. 위쪽의 오류 내용을 Claude에게 보여주세요."
         }
         $fileCount = ($changed | Measure-Object).Count
-        Write-Host "  변경 파일 $fileCount개 commit 완료"
+        Write-Host "  변경 파일 ${fileCount}개 commit 완료"
     } elseif ($changed) {
         Fail ("올릴 파일이 분명히 있는데 git add가 아무것도 추가하지 못했습니다.`n" +
               "위쪽에 'Filename too long' 오류가 있으면 이 스크립트를 한 번만 더 실행해보고,`n" +
@@ -267,7 +267,7 @@ if ($useGit -and $Mode -ne "pull") {
     # 이전 실행에서 push가 실패해 밀려 있는 commit이 있는지 확인
     $aheadRaw = git -C $RepoDir rev-list --count "@{u}..HEAD" 2>$null
     if ($LASTEXITCODE -eq 0 -and $aheadRaw) { $ahead = [int]$aheadRaw }
-    if ($ahead -gt 0) { Write-Host "  GitHub로 올릴 commit: $ahead개" }
+    if ($ahead -gt 0) { Write-Host "  GitHub로 올릴 commit: ${ahead}개" }
 
     foreach ($delay in 0, 2, 4, 8, 16) {
         if ($delay -gt 0) {

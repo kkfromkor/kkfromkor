@@ -1,4 +1,7 @@
 # 여기에 적힌 OPCG 하위 폴더만 동기화됩니다. (한 줄에 하나, OPCG 기준 상대 경로)
-# 예: rev28_work\st30
-# 비어 있으면 OPCG 바로 아래 낱개 파일 + 전체 목록(_inventory.txt)만 동기화됩니다.
 # 이 목록은 Claude가 _inventory.txt를 보고 관리합니다.
+# 현재: st30 작업에 필요한 핵심 폴더 (합계 약 19MB)
+rev28_work\windows_source\opcg_data
+rev28_work\windows_source\tools
+rev28_work\windows_source\cdb_backups
+rev28_work\windows_source\bin\release\expansions
