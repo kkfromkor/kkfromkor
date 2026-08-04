@@ -59,6 +59,9 @@ if ($useGit) {
               '  cd $env:USERPROFILE\Documents' + "`n" +
               "  git clone https://github.com/kkfromkor/kkfromkor.git")
     }
+    # 긴 경로(Windows 260자 제한)와 한글 파일명 대응
+    git -C $RepoDir config core.longpaths true
+    git -C $RepoDir config core.quotepath false
 }
 
 # robocopy 옵션
@@ -141,9 +144,16 @@ $ahead      = 0
 if ($useGit -and $Mode -ne "pull") {
     Write-Host "[4/4] GitHub로 올리는 중 (commit & push)..."
     git -C $RepoDir add -A -- OPCG
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("파일을 git에 추가(add)하지 못했습니다. 위쪽의 영어 오류 문구를 확인하세요.`n" +
+              "- 'Filename too long'이 보이면: 경로가 긴 파일 때문인데, 방금 설정을 자동으로 켰으니 이 스크립트를 한 번만 더 실행해보세요.`n" +
+              "- 'Permission denied'가 보이면: 그 파일을 열어둔 프로그램을 닫고 다시 실행하세요.`n" +
+              "- 그 외에는 이 창 내용을 Claude에게 붙여넣어 주세요.")
+    }
 
-    $changed = git -C $RepoDir status --porcelain -- OPCG
-    if ($changed) {
+    $changed = git -C $RepoDir status --porcelain -uall -- OPCG
+    git -C $RepoDir diff --cached --quiet
+    if ($LASTEXITCODE -ne 0) {
         $hadChanges = $true
         if (-not (git -C $RepoDir config user.email)) {
             git -C $RepoDir config user.name  "kkfromkor"
@@ -156,6 +166,10 @@ if ($useGit -and $Mode -ne "pull") {
         }
         $fileCount = ($changed | Measure-Object).Count
         Write-Host "  변경 파일 $fileCount개 commit 완료"
+    } elseif ($changed) {
+        Fail ("올릴 파일이 분명히 있는데 git add가 아무것도 추가하지 못했습니다.`n" +
+              "위쪽에 'Filename too long' 오류가 있으면 이 스크립트를 한 번만 더 실행해보고,`n" +
+              "그래도 안 되면 이 창 내용을 Claude에게 붙여넣어 주세요.")
     } else {
         Write-Host "  새로 commit할 변경 파일은 없습니다."
     }
