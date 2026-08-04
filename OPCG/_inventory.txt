@@ -1,6 +1,6 @@
 ﻿# OPCG 작업 폴더 전체 파일 목록 (자동 생성: 2026-08-05 03:02)
 # 작업 폴더: C:\Users\정민혁\Documents\OPCG
-# 파일 159314개, 총 약 22157MB
+# 파일 159355개, 총 약 22161MB
 # 형식: 상대경로<TAB>크기(byte)
 .gitkeep	0
 c-users-fatal-proj-edopro-android.zip	483483834
@@ -120978,6 +120978,23 @@ rev28_work\windows_source\bin\release\expansions\script\c880002537.lua	1235
 rev28_work\windows_source\bin\release\expansions\script\c880002538.lua	1161
 rev28_work\windows_source\bin\release\expansions\script\c880002539.lua	1470
 rev28_work\windows_source\bin\release\expansions\script\c880002540.lua	1399
+rev28_work\windows_source\bin\release\expansions\script\c880002541.lua	2317
+rev28_work\windows_source\bin\release\expansions\script\c880002542.lua	1276
+rev28_work\windows_source\bin\release\expansions\script\c880002543.lua	1115
+rev28_work\windows_source\bin\release\expansions\script\c880002544.lua	1235
+rev28_work\windows_source\bin\release\expansions\script\c880002545.lua	417
+rev28_work\windows_source\bin\release\expansions\script\c880002546.lua	1072
+rev28_work\windows_source\bin\release\expansions\script\c880002547.lua	1834
+rev28_work\windows_source\bin\release\expansions\script\c880002548.lua	1157
+rev28_work\windows_source\bin\release\expansions\script\c880002549.lua	1550
+rev28_work\windows_source\bin\release\expansions\script\c880002550.lua	1190
+rev28_work\windows_source\bin\release\expansions\script\c880002551.lua	1364
+rev28_work\windows_source\bin\release\expansions\script\c880002552.lua	1851
+rev28_work\windows_source\bin\release\expansions\script\c880002553.lua	433
+rev28_work\windows_source\bin\release\expansions\script\c880002554.lua	1289
+rev28_work\windows_source\bin\release\expansions\script\c880002555.lua	1964
+rev28_work\windows_source\bin\release\expansions\script\c880002556.lua	1981
+rev28_work\windows_source\bin\release\expansions\script\c880002557.lua	1666
 rev28_work\windows_source\bin\release\expansions\script\c881000000.lua	101
 rev28_work\windows_source\bin\release\expansions\script\c881000001.lua	101
 rev28_work\windows_source\bin\release\expansions\script\c881000002.lua	101
@@ -122415,6 +122432,23 @@ rev28_work\windows_source\bin\release\expansions\script\c881001638.lua	97
 rev28_work\windows_source\bin\release\expansions\script\c881001639.lua	97
 rev28_work\windows_source\bin\release\expansions\script\c881001643.lua	97
 rev28_work\windows_source\bin\release\expansions\script\c881001644.lua	97
+rev28_work\windows_source\bin\release\expansions\script\c881001645.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001646.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001647.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001648.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001649.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001650.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001651.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001652.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001653.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001654.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001655.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001656.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001657.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001658.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001659.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001660.lua	94
+rev28_work\windows_source\bin\release\expansions\script\c881001661.lua	94
 rev28_work\windows_source\bin\release\expansions\script\cards-opcg.cdb	0
 rev28_work\windows_source\bin\release\expansions\script\opcg_battle.lua	25300
 rev28_work\windows_source\bin\release\expansions\script\opcg_bootstrap.lua	870
@@ -156881,6 +156915,7 @@ rev28_work\windows_source\cdb_backups\codex_cardfix_backup_20260707_210742\cards
 rev28_work\windows_source\cdb_backups\codex_cardfix_backup_20260707_210742\opcg_battle.lua	20818
 rev28_work\windows_source\cdb_backups\codex_cardfix_backup_20260707_210742\opcg_contract_ops.lua	52469
 rev28_work\windows_source\cdb_backups\codex_cardfix_backup_20260707_210742\opcg_life.lua	8170
+rev28_work\windows_source\cdb_backups\st30_backup_20260804_174021\cards-opcg.cdb	3444736
 rev28_work\windows_source\config\.gitkeep	0
 rev28_work\windows_source\discord-launcher\discord-launcher.m	486
 rev28_work\windows_source\discord-launcher\premake5.lua	224
@@ -158958,6 +158993,9 @@ rev28_work\windows_source\opcg_data\opcg_printing_cdb_map.json	1277745
 rev28_work\windows_source\opcg_data\opcg_printing_expansion_report.json	527
 rev28_work\windows_source\opcg_data\opcg_runtime_test_report.json	78
 rev28_work\windows_source\opcg_data\st29_en_raw.json	13521
+rev28_work\windows_source\opcg_data\st30_en.html	132077
+rev28_work\windows_source\opcg_data\st30_en_raw.json	14608
+rev28_work\windows_source\opcg_data\st30_jp.html	134398
 rev28_work\windows_source\opcg_dev_tools\apply_cannot_be_ko.py	3634
 rev28_work\windows_source\opcg_dev_tools\apply_per_count.py	3508
 rev28_work\windows_source\opcg_dev_tools\bind_harness.py	3945
@@ -159220,15 +159258,18 @@ rev28_work\windows_source\sfAudio\src\System\MemoryInputStream.cpp	2898
 rev28_work\windows_source\sfAudio\src\System\Time.cpp	6485
 rev28_work\windows_source\sound\files.txt	537
 rev28_work\windows_source\textures\.gitkeep	0
+rev28_work\windows_source\tools\add_st30_to_cdb.py	9359
 rev28_work\windows_source\tools\audit_opcg_runtime_coverage.py	3668
 rev28_work\windows_source\tools\bin2c.lua	4583
 rev28_work\windows_source\tools\bundled_pics.txt	1385
 rev28_work\windows_source\tools\deploy_all.ps1	4595
 rev28_work\windows_source\tools\expand_opcg_printings.py	14987
 rev28_work\windows_source\tools\make_release.ps1	5493
+rev28_work\windows_source\tools\merge_opcg_jp_text.py	2047
 rev28_work\windows_source\tools\opcg_find_op.py	34374
 rev28_work\windows_source\tools\opcg_op_catalog_cache.json	116836
 rev28_work\windows_source\tools\rewind_harness.cpp	14690
+rev28_work\windows_source\tools\scrape_opcg_en_set.py	4154
 rev28_work\windows_source\tools\validate_opcg_printing_expansion.py	3833
 rev28_work\windows_source\tools\opcg_tests\BASELINE.md	2786
 rev28_work\windows_source\tools\opcg_tests\cdb_dump.csv	145643
