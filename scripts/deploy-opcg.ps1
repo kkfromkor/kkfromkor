@@ -23,6 +23,15 @@ $RepoDir = Split-Path -Parent $PSScriptRoot
 $SrcExp  = Join-Path $RepoDir "OPCG\rev28_work\windows_source\bin\release\expansions"
 $SrcPics = Join-Path $RepoDir "OPCG\rev28_work\windows_source\bin\release\pics"
 
+# 이 컴퓨터의 작업 폴더 (동기화 스크립트와 같은 규칙으로 찾음)
+$WorkDir = "C:\Users\정민혁\Documents\OPCG"
+if (-not (Test-Path $WorkDir)) {
+    $docsOpcg = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "OPCG"
+    if (Test-Path $docsOpcg) { $WorkDir = $docsOpcg }
+}
+# 이 컴퓨터에 있는 게임 클라이언트 (작업 폴더 안 CODEX 통합본)
+$CodexRelease = Join-Path $WorkDir "edopcg_CODEX_INTEGRATED_20260701_FINAL_EDIT_BY_CLAUDE_FABLE\bin\release"
+
 function Fail([string]$Msg) {
     Write-Host ""
     Write-Host "=======================================" -ForegroundColor Red
@@ -50,8 +59,9 @@ Write-Host ""
 Write-Host "=== 게임 폴더 직결 배포 시작 ==="
 Write-Host "소스: $SrcExp"
 
-# 배포처: tools/deploy_all.ps1의 타깃 그대로 + 캐논(F: CODEX)
+# 배포처: 이 컴퓨터의 게임 클라이언트 + tools/deploy_all.ps1의 타깃(다른 컴퓨터, 없으면 건너뜀)
 $Targets = @(
+    @{ name = "이 컴퓨터 CODEX 클라이언트";     script = (Join-Path $CodexRelease "expansions\script"); cdb = (Join-Path $CodexRelease "expansions\cards-opcg.cdb") },
     @{ name = "캐논 (F: CODEX)";               script = "F:\edopcg_CODEX_INTEGRATED_20260701_FINAL_EDIT_BY_CLAUDE_FABLE\bin\release\expansions\script"; cdb = "F:\edopcg_CODEX_INTEGRATED_20260701_FINAL_EDIT_BY_CLAUDE_FABLE\bin\release\expansions\cards-opcg.cdb" },
     @{ name = "OPTCG repo (클라 자동업데이트)"; script = "E:\github\OPTCG\script";                     cdb = "E:\github\OPTCG\cards-opcg.cdb" },
     @{ name = "서버 드롭 폴더";                 script = "E:\Multiroptcg-data\script";                 cdb = "E:\Multiroptcg-data\cards-opcg.cdb" },
@@ -90,6 +100,7 @@ foreach ($t in $Targets) {
 
 # 새 카드 이미지 배포 (pics 폴더가 있는 곳에만, 추가/갱신만 - 삭제 없음)
 $PicsTargets = @(
+    (Join-Path $CodexRelease "pics"),
     "F:\edopcg_CODEX_INTEGRATED_20260701_FINAL_EDIT_BY_CLAUDE_FABLE\bin\release\pics",
     "F:\edopro\bin\release\pics",
     "E:\dfdffsdfe\원배포\pics",
@@ -110,10 +121,12 @@ if ($picsFiles.Count -gt 0) {
 
 Write-Host ""
 if ($done -eq 0) {
-    Fail ("배포된 곳이 한 군데도 없습니다. 배포처 드라이브(E:, F:)가 연결돼 있는지 확인하세요.`n" +
-          "배포처 경로가 바뀌었다면 이 창 내용을 Claude에게 알려주세요.")
+    Fail ("배포된 곳이 한 군데도 없습니다.`n" +
+          "- 이 컴퓨터의 게임 폴더를 못 찾았습니다: $CodexRelease`n" +
+          "- 게임을 실행하는 실제 폴더 경로(게임 바로가기 우클릭 > 파일 위치)를 Claude에게 알려주세요.")
 }
 Write-Host ("=== 배포 완료: {0}곳 반영 ===" -f $done) -ForegroundColor Green
+Write-Host "참고: rev28_work\windows_source 클라이언트는 동기화 단계에서 이미 갱신됩니다."
 
 # OPTCG repo 자동 커밋/push - 카드 데이터 경로만 (코어 dll/exe/update.json 제외)
 # (사용자 승인 2026-08-04: 코어 외에는 확인 없이 리포 반영·배포)
