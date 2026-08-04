@@ -1,0 +1,10 @@
+# Windows junk
+Thumbs.db
+desktop.ini
+
+# macOS junk
+.DS_Store
+
+# Office temp files
+~$*
+*.tmp
