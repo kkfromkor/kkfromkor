@@ -179,12 +179,22 @@ if ($useGit -and $Mode -ne "pull") {
     if ($LASTEXITCODE -eq 0 -and $aheadRaw) { $ahead = [int]$aheadRaw }
     if ($ahead -gt 0) { Write-Host "  GitHub로 올릴 commit: $ahead개" }
 
+    $syncMB = 0
+    if (Test-Path $RepoSyncDir) {
+        $sum = (Get-ChildItem -Path $RepoSyncDir -Recurse -File -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+        if ($sum) { $syncMB = [math]::Round($sum / 1MB) }
+    }
+    Write-Host "  올릴 폴더 크기: 약 ${syncMB}MB"
+
+    $pushOut = ""
     foreach ($delay in 0, 2, 4, 8, 16) {
         if ($delay -gt 0) {
             Write-Host "* push 실패 - ${delay}초 후 다시 시도합니다..." -ForegroundColor Yellow
             Start-Sleep -Seconds $delay
         }
-        git -C $RepoDir push
+        $pushOut = git -C $RepoDir push 2>&1 | Out-String
+        if ($pushOut) { Write-Host $pushOut.Trim() }
         if ($LASTEXITCODE -eq 0) { $pushedOk = $true; break }
     }
 } elseif ($Mode -eq "pull") {
@@ -209,7 +219,16 @@ if ($Mode -eq "pull") {
         }
     }
 } else {
-    Fail ("GitHub 업로드(push)에 실패했습니다. 파일 복사와 commit은 됐지만 GitHub에는 안 올라갔습니다.`n" +
-          "- 실행 중 브라우저로 GitHub 로그인 창이 떴다면: 로그인을 마친 뒤 이 스크립트를 다시 실행하세요.`n" +
-          "- 위쪽의 push 오류 메시지(영어 문구)를 Claude에게 붙여넣어 주세요.")
+    $why = "- 위쪽의 push 오류 메시지(영어 문구)와 이 창 내용을 Claude에게 붙여넣어 주세요."
+    if ($pushOut -match "Authentication failed|could not read Username|Permission to .+ denied|returned error: 403|Logon failed") {
+        $why = ("- 원인: GitHub 로그인/권한 문제입니다.`n" +
+                "  브라우저로 GitHub 로그인 창이 뜨면 kkfromkor 계정으로 로그인한 뒤 이 스크립트를 다시 실행하세요.`n" +
+                "  로그인 창이 아예 안 뜨면 이 창 내용을 Claude에게 보여주세요.")
+    } elseif ($pushOut -match "pack exceeds maximum|RPC failed|HTTP 408|HTTP 400|curl 55|curl 52|remote end hung up") {
+        $why = ("- 원인: 한 번에 올리기엔 용량이 큰 것 같습니다 (올릴 크기 약 ${syncMB}MB).`n" +
+                "  Claude에게 '용량 때문에 push 실패, 약 ${syncMB}MB'라고 알려주세요. 나눠서 올리는 방법을 만들어줍니다.")
+    } elseif ($pushOut -match "non-fast-forward|fetch first|\[rejected\]") {
+        $why = "- 원인: GitHub 쪽에 새 변경이 있어서입니다. 이 스크립트를 한 번 더 실행하면 받아서 합친 뒤 올라갑니다."
+    }
+    Fail ("GitHub 업로드(push)에 실패했습니다. 파일 복사와 commit은 됐지만 GitHub에는 안 올라갔습니다.`n" + $why)
 }
