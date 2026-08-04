@@ -6,4 +6,5 @@
 - 동기화 규칙: 더 최신 파일이 이긴다. 파일 삭제는 전파되지 않는다. 95MB 초과 파일은 동기화에서 제외된다.
 - **선택 동기화**: 작업 폴더 전체는 약 22GB라 전체 동기화를 하지 않는다. `scripts/sync-include.txt`(OPCG 기준 상대 경로, 한 줄 하나)에 적힌 하위 폴더만 동기화된다. 동기화 대상 합계는 1.5GB를 넘기지 않는다. `pull:` 접두사 항목은 받기 전용(리포→작업 폴더만)으로, PC 쪽 대용량 폴더(예: 카드 이미지 pics)에 새 파일만 내려줄 때 쓴다.
 - `OPCG/_inventory.txt`는 PC 작업 폴더의 **전체 파일 목록**(상대경로 + 크기, 매 동기화마다 갱신)이다. 필요한 파일이 리포에 없으면 이 목록에서 찾아 해당 폴더를 `sync-include.txt`에 추가·push하고, 사용자에게 동기화 스크립트 재실행을 요청한다.
-- **게임 반영(배포)**: 카드 데이터(cdb/lua/pics)를 실제 게임·서버에 꽂을 때는 `sync-and-deploy.bat`(= `scripts/deploy-opcg.ps1`)을 실행하게 한다. 동기화 후 기존 `tools/deploy_all.ps1`과 같은 방식(전체 미러 + 유령 파일 정리)으로 캐논(F: CODEX)과 배포처들(E:\github\OPTCG, 서버 드롭 폴더, 로컬 클라이언트 등)에 복사한다. 서버 적용(적용하기.bat)과 OPTCG repo push는 사용자 수동.
+- **게임 반영(배포)**: 카드 데이터(cdb/lua/pics)를 실제 게임·서버에 꽂을 때는 `sync-and-deploy.bat`(= `scripts/deploy-opcg.ps1`)을 실행하게 한다. 동기화 후 기존 `tools/deploy_all.ps1`과 같은 방식(전체 미러 + 유령 파일 정리)으로 캐논(F: CODEX)과 배포처들(E:\github\OPTCG, 서버 드롭 폴더, 로컬 클라이언트 등)에 복사하고, OPTCG repo 커밋/push와 서버 적용하기.bat 실행까지 자동으로 한다.
+- **상시 승인 (사용자, 2026-08-04)**: 코어(ocgcore, 엔진 C++, exe, update.json/릴리스)를 건드리는 것 **외의** 카드 데이터 작업(cdb/lua/pics/opcg_data)은 사용자 확인 없이 바로 리포에 커밋·push하고 배포까지 진행해도 된다. 코어 관련 변경은 반드시 먼저 물어본다.

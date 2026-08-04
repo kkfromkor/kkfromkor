@@ -114,7 +114,38 @@ if ($done -eq 0) {
           "배포처 경로가 바뀌었다면 이 창 내용을 Claude에게 알려주세요.")
 }
 Write-Host ("=== 배포 완료: {0}곳 반영 ===" -f $done) -ForegroundColor Green
-Write-Host ""
-Write-Host "남은 수동 단계 (기존 방식 그대로):"
-Write-Host "  1) E:\github\OPTCG 커밋 & push (클라 자동업데이트 배포용)"
-Write-Host "  2) E:\Multiroptcg-data\적용하기.bat 실행 또는 서버 재시작"
+
+# OPTCG repo 자동 커밋/push - 카드 데이터 경로만 (코어 dll/exe/update.json 제외)
+# (사용자 승인 2026-08-04: 코어 외에는 확인 없이 리포 반영·배포)
+$optcg = "E:\github\OPTCG"
+if ((Test-Path (Join-Path $optcg ".git")) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host ""
+    Write-Host "OPTCG repo 커밋/push 중..."
+    git -C $optcg add -- script cards-opcg.cdb 2>$null
+    if (Test-Path (Join-Path $optcg "pics")) { git -C $optcg add -- pics 2>$null }
+    git -C $optcg diff --cached --quiet
+    if ($LASTEXITCODE -ne 0) {
+        $stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
+        git -C $optcg commit -m "카드 데이터 업데이트 (sync-and-deploy $stamp)"
+        git -C $optcg push
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  OK: OPTCG repo push 완료 (클라 자동업데이트 배포됨)" -ForegroundColor Green
+        } else {
+            Write-Host "  경고: OPTCG repo push 실패 - commit은 저장됨. 수동으로 push하거나 Claude에게 알려주세요." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  OPTCG repo: 새 변경 없음"
+    }
+} else {
+    Write-Host "  건너뜀: OPTCG repo 없음 또는 git 미설치" -ForegroundColor Yellow
+}
+
+# 서버 적용하기.bat 자동 실행 (별도 창으로 띄움 - 내부에 pause가 있어도 안 막히게)
+$apply = "E:\Multiroptcg-data\적용하기.bat"
+if (Test-Path $apply) {
+    Write-Host "서버 적용하기.bat 창을 띄웁니다..."
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$apply`"" -WorkingDirectory (Split-Path $apply)
+    Write-Host "  새로 뜬 창에서 완료를 확인하세요." -ForegroundColor Green
+} else {
+    Write-Host "  건너뜀: 적용하기.bat 없음 - 서버 반영은 서버 재시작으로 하세요." -ForegroundColor Yellow
+}
