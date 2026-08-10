@@ -107,6 +107,14 @@ local function attach_reset(effect, duration, source)
 		X.schedule("THIS_BATTLE_END", source, function() effect:Reset() end)
 	end
 end
+-- [2026-08-10 OP07-026 재수리] 둥(오버레이) 낱장 동결 전용: SINGLE 이펙트는
+-- 오버레이 카드에서 코어 집계에 안 잡히므로 플래그로 나른다(레스트 상태와
+-- 같은 원시). 리셋 수식은 single_effect와 동일 규약.
+local function freeze_don_flag(card, duration, source)
+	local reset, count = reset_for(duration, source)
+	card:RegisterFlagEffect(opcg.FLAG_DON_FREEZE,
+		(reset or 0) + RESET_EVENT + RESETS_STANDARD, 0, count or 1)
+end
 local function single_effect(source, target, code, value, duration)
 	local effect = Effect.CreateEffect(source)
 	effect:SetType(EFFECT_TYPE_SINGLE)
@@ -225,11 +233,14 @@ local function conditions_match(conditions, context)
 	return true
 end
 
-function X.player_has(player, code, target, context)
+function X.player_has(player, code, target, context, reason)
+	-- reason: 관문 식별자("PLAY"=기동 일반 등장 / "EFFECT"=효과 등장 관문).
+	-- reason=EFFECT 제약(OP12-036 조로류)이 일반 등장을 놓아주기 위해 값
+	-- 함수 4번째 인자로 흘린다. 무표시 호출은 nil로 전달된다.
 	if not Duel.IsPlayerAffectedByEffect then return false end
 	for _, effect in ipairs({Duel.IsPlayerAffectedByEffect(player, code)}) do
 		local value = opcg.GetEffectValue(effect)
-		if type(value) ~= "function" or value(effect, target, context) then return true end
+		if type(value) ~= "function" or value(effect, target, context, reason) then return true end
 	end
 	return false
 end
@@ -258,6 +269,22 @@ local function player_effect(source, player, code, value, duration)
 	attach_reset(effect, duration, source)
 	Duel.RegisterEffect(effect, source:GetControler())
 	return effect
+end
+
+local function cannot_play_value(action, source, predicate)
+	-- CANNOT_PLAY의 DSL 존중(2026-08-07 유저 제보, OP12-036 조로 "패의 이
+	-- 카드는 효과로 등장할 수 없다"): selector SELF면 자기 자신만 막고,
+	-- reason=EFFECT면 기동 일반 등장(관문 reason "PLAY")은 놓아준다 —
+	-- 무표시 경로는 안전하게 차단 쪽으로 떨어진다.
+	local self_only = action.selector and action.selector.kind == "SELF"
+	local effect_only = action.reason == "EFFECT"
+	return function(_, target, _, play_reason)
+		if target == nil then return false end
+		if self_only and target ~= source then return false end
+		if not predicate(target) then return false end
+		if effect_only and play_reason == "PLAY" then return false end
+		return true
+	end
 end
 
 local function ko_protection(action, context)
@@ -514,7 +541,14 @@ function X.execute(op, action, context)
 		return cards
 	elseif op == "SET_BASE_POWER_FROM_TARGET" then
 		local sources = choose(action.source_selector, context)
-		local value = sources[1] and opcg.GetBasePower(sources[1]) or 0
+		-- 참조값 = 대상의 '현재' 파워(유저 재정 2026-08-09, EB01-061 제보:
+		-- "~와 같은 파워"는 변동 포함 해결 시점 수치). "원래 파워와 같은
+		-- 파워"를 명기한 카드(OP14-053 비스타)만 reference=BASE로 원래 파워.
+		local value = 0
+		if sources[1] then
+			value = action.reference == "BASE" and opcg.GetBasePower(sources[1])
+				or opcg.GetPower(sources[1])
+		end
 		local targets = choose(action.selector, context)
 		for _, card in ipairs(targets) do modify(context.card, card, EFFECT_SET_BASE_ATTACK, value, action.duration) end
 		return targets
@@ -539,12 +573,31 @@ function X.execute(op, action, context)
 		end
 		return {}
 	elseif op == "MODIFY_POWER_SPLIT" then
-		local cards = choose(action.selector, context)
-		for index, card in ipairs(cards) do
-			local amount = index <= (action.primary_count or 1) and action.primary_amount or action.secondary_amount
-			modify(context.card, card, EFFECT_UPDATE_ATTACK, amount or 0, action.duration)
+		-- 순차 처리(2026-08-06 유저 하달, OP08-118): 2장을 한 창에서 고르는
+		-- 대신 첫 장을 골라 -3000을 바로 적용하고, 남은 후보에서 둘째 장을
+		-- 골라 -2000을 적용한다. 첫 선택을 취소하면 이후 단계도 중단
+		-- ("1장을 -3000하고, 나머지는 -2000" — 나머지는 첫 장이 있어야 존재).
+		-- 단계별 상단 안내문은 금액별 !system 스트링(SELECT_HINT_BY_AMOUNT).
+		local selector = action.selector or {}
+		local picker = selector.chooser == "OPPONENT" and (1 - chooser) or chooser
+		local minimum = selector.mode == "EXACT" and 1 or 0
+		local picked = {}
+		for index = 1, selector.count or 2 do
+			local amount = (index <= (action.primary_count or 1)
+				and action.primary_amount or action.secondary_amount) or 0
+			local candidates = assert(opcg.GetCandidateGroup(selector, context), "unsupported OPCG selector")
+			for _, previous in ipairs(picked) do candidates:RemoveCard(previous) end
+			if candidates:GetCount() == 0 then break end
+			local hint = opcg.SELECT_HINT_BY_AMOUNT[amount]
+			if hint then Duel.Hint(HINT_SELECTMSG, picker, hint) end
+			local selected = candidates:Select(picker, minimum, 1, nil)
+			local card = selected:GetFirst()
+			if not card then break end
+			Duel.HintSelection(selected, true)
+			modify(context.card, card, EFFECT_UPDATE_ATTACK, amount, action.duration)
+			picked[#picked + 1] = card
 		end
-		return cards
+		return remember(context, picked)
 	elseif op == "PLAY_FROM_DECK" then
 		return action_play_from_deck(action, context)
 	elseif op == "LOOK_DECK_TOP" then
@@ -821,7 +874,7 @@ function X.execute(op, action, context)
 	elseif op == "CANNOT_PLAY" then
 		local predicate = filter_for(action.filter, context)
 		player_effect(context.card, player, opcg.EFFECT_CANNOT_PLAY,
-			function(_, card) return card ~= nil and predicate(card) end, action.duration)
+			cannot_play_value(action, context.card, predicate), action.duration)
 		context.last_action_succeeded = true
 		return {}
 	elseif op == "CANNOT_SET_DON_ACTIVE" then
@@ -832,7 +885,7 @@ function X.execute(op, action, context)
 			local selected = maximum > 0 and group:Select(chooser, minimum, maximum, nil)
 				or Group.CreateGroup()
 			for card in aux.Next(selected) do
-				single_effect(context.card, card, opcg.EFFECT_CANNOT_SET_DON_ACTIVE, 1, action.duration)
+				freeze_don_flag(card, action.duration, context.card)
 			end
 		else
 			player_effect(context.card, player, opcg.EFFECT_CANNOT_SET_DON_ACTIVE,
@@ -878,17 +931,34 @@ function X.execute(op, action, context)
 		context.last_action_succeeded = true
 		return {}
 	elseif op == "CANNOT_SET_ACTIVE_CARD_OR_DON" then
-		local cards = action.card_selector and choose(action.card_selector, context) or {}
-		for _, card in ipairs(cards) do
-			single_effect(context.card, card, opcg.EFFECT_CANNOT_SET_ACTIVE, 1, action.duration)
+		-- OP07-026 보니 수리(유저 제보 2026-08-09 "상대 둥 못 얼림"): 종전엔
+		-- 캐릭터 창을 먼저 열고 그걸 취소해야만 둥 창이 뒤따르는 2단 흐름이라
+		-- 상대 둥을 사실상 집을 수 없었다 — OP12-037류(REST_CARD_OR_DON)가
+		-- 앓다 고친 그 병증의 잔존 사례. 같은 처방: 캐릭터 후보와 코스트
+		-- 에리어 둥을 한 선택창에 섞어 올린다. 둥 풀은 GetFieldDonGroup(부여
+		-- 둥 포함)이 아니라 DonStateGroup(코스트 에리어 한정) — 부여 둥은
+		-- 리프레시에 액티브가 아니라 반납이라 "레스트 상태인 둥!!"이 아니다.
+		-- 동결 집행 자체는 온전(SetActive/set_rested가 개별 효과 존중 확인).
+		local pool = Group.CreateGroup()
+		local chars = action.card_selector and opcg.GetCandidateGroup
+			and opcg.GetCandidateGroup(action.card_selector, context)
+		if chars then pool:Merge(chars) end
+		if opcg.DonStateGroup then
+			pool:Merge(opcg.DonStateGroup(player, (action.don_state or "RESTED") == "RESTED"))
 		end
-		if #cards < (action.count or 1) then
-			local group = opcg.GetFieldDonGroup(player, action.don_state or "RESTED")
-			local selected = group:GetCount() > 0 and group:Select(chooser, 0, 1, nil)
-				or Group.CreateGroup()
-			for don in aux.Next(selected) do
-				single_effect(context.card, don, opcg.EFFECT_CANNOT_SET_DON_ACTIVE, 1, action.duration)
-				cards[#cards + 1] = don
+		local maximum = math.min(action.count or 1, pool:GetCount())
+		local minimum = action.mode == "EXACT" and maximum or 0
+		local cards = {}
+		if maximum > 0 then
+			local selected = pool:Select(chooser, minimum, maximum, nil)
+			if selected:GetCount() > 0 then Duel.HintSelection(selected, true) end
+			for card in aux.Next(selected) do
+				if opcg.IsLeader(card) or opcg.IsCharacter(card) or opcg.IsStage(card) then
+					single_effect(context.card, card, opcg.EFFECT_CANNOT_SET_ACTIVE, 1, action.duration)
+				else
+					freeze_don_flag(card, action.duration, context.card)
+				end
+				cards[#cards + 1] = card
 			end
 		end
 		context.last_action_succeeded = #cards > 0 or action.mode == "UP_TO"
@@ -1158,9 +1228,30 @@ function X.register_continuous(card, effect, action, condition)
 		return continuous_player_effect(card, action, EFFECT_CANNOT_DRAW, 1, condition)
 	end
 	if op == "CANNOT_PLAY" then
-		local predicate = filter_for(action.filter, {card=card, player=card:GetControler()})
-		return continuous_player_effect(card, action, opcg.EFFECT_CANNOT_PLAY,
-			function(_, target) return target ~= nil and predicate(target) end, condition)
+		-- OP12-036 조로 수리(2026-08-07 유저 제보: 효과 등장이 그대로 통과):
+		-- 종전 등록은 (1) 필드 상주 한정이라 zone=HAND("패의 이 카드는")가
+		-- 죽어 있었고 (2) SELF 셀렉터 무시로 걸리면 자기 통제권 전체를 막을
+		-- 뻔했으며 (3) reason=EFFECT 무시로 일반 등장까지 걸릴 뻔했다.
+		-- 셋 다 DSL대로 존중한다. zone=HAND면 패 상주 효과로 직접 등록
+		-- (continuous_player_effect는 필드 상주 고정).
+		local context = {card=card, player=card:GetControler()}
+		local predicate = filter_for(action.filter, context)
+		local value = cannot_play_value(action, card, predicate)
+		if action.zone == "HAND" then
+			local player = opcg.ResolvePlayer(action.player or "YOU", context)
+			local native = Effect.CreateEffect(card)
+			native:SetType(EFFECT_TYPE_FIELD)
+			native:SetProperty(EFFECT_FLAG_PLAYER_TARGET)
+			native:SetCode(opcg.EFFECT_CANNOT_PLAY)
+			native:SetRange(LOCATION_HAND)
+			native:SetTargetRange(player == card:GetControler() and 1 or 0,
+				player == card:GetControler() and 0 or 1)
+			native:SetCondition(condition)
+			opcg.SetEffectValue(native, value)
+			card:RegisterEffect(native)
+			return true
+		end
+		return continuous_player_effect(card, action, opcg.EFFECT_CANNOT_PLAY, value, condition)
 	end
 	if op == "CANNOT_SET_DON_ACTIVE" then
 		return continuous_player_effect(card, action, opcg.EFFECT_CANNOT_SET_DON_ACTIVE,
@@ -1536,7 +1627,10 @@ function X.after_remove(cards, reason, destination, context)
 			if source_player ~= nil and source_player ~= owner then
 				X.emit("ON_OWN_TRAIT_CHARACTER_LEFT_BY_OPPONENT_EFFECT", event, owner)
 				X.emit("ON_OWN_TRAIT_CHARACTER_KO_OR_LEFT_BY_OPPONENT_EFFECT", event, owner)
-				if destroyed then X.emit("ON_KO_BY_OPPONENT_EFFECT", event, owner, {card}) end
+				-- [2026-08-10 룰 재정] 무효된 채 KO되면 본인의 KO 계열 타이밍 봉인
+				if destroyed and card:GetFlagEffect(opcg.FLAG_NEGATED_KO) == 0 then
+					X.emit("ON_KO_BY_OPPONENT_EFFECT", event, owner, {card})
+				end
 			else
 				X.emit("ON_OWN_TRAIT_CHARACTER_LEFT_BY_EFFECT", event, owner)
 			end
@@ -1544,6 +1638,17 @@ function X.after_remove(cards, reason, destination, context)
 				X.emit("ON_OPPONENT_CHARACTER_RETURNED_TO_HAND_BY_OWN_EFFECT",
 					event, source_player)
 			end
+		end
+		if destroyed and opcg.IsCharacter(card) then
+			-- [OP16-100] 캐릭터 KO 턴 이력(전투/효과 불문): 소유자별 턴
+			-- 도장 — CHARACTER_KOED_THIS_TURN 조건이 소비한다.
+			local turn = Duel.GetTurnCount and Duel.GetTurnCount() or 0
+			local log = opcg._koed_this_turn
+			if not log or log.turn ~= turn then
+				log = { turn = turn }
+				opcg._koed_this_turn = log
+			end
+			log[owner] = true
 		end
 		if destroyed and opcg.IsCharacter(card) and opcg.GetBasePower(card) >= 6000 then
 			X.emit("ON_DAMAGE_OR_HIGH_POWER_CHARACTER_KO", event, owner)

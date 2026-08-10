@@ -180,6 +180,116 @@ local function select_blocker(player, candidates)
 	end
 end
 
+-- ───── 카운터 프리뷰 기대치 (유저 API 재정 2026-08-06) ─────
+-- "확정하면 실제로 올라갈 타점"을 아는 쪽(Lua/IR)이 계산해 클라에 민다.
+-- 전선 = MSG_HINT 커스텀 타입 214, 수비측 한정 발송(손패 유래 숫자라
+-- 브로드캐스트 금지). 구exe는 힌트 스위치에서 조용히 무시하고 구호스트는
+-- 미지 타입을 아예 중계하지 않으므로(각각 duelclient/generic_duel 실측)
+-- 신구 혼재에서 우아하게 강등된다 — 마젠타는 def합 폴백으로 동작.
+B.HINT_COUNTER_EXPECT = 214
+
+function Duel.SetCounterPreviewExpectation(player, value)
+	if not Duel.Hint then return end
+	Duel.Hint(B.HINT_COUNTER_EXPECT, player, math.max(0, math.floor(value or 0)))
+end
+
+-- 이벤트 한 장의 기대 타점. 평가 규약(과소 방향 보수 — 프리뷰는 모자란
+-- 게 거짓말보다 낫고, 실수치는 해결이 맞춘다):
+--   · COUNTER 타이밍 효과의 고정 MODIFY_POWER만, 자기편 대상·양수 한정
+--     (조준 가정: 방어측 — 고정 +3000짜리들도 대상 선택형이라 이미 현행
+--     암묵 전제다). 상대 감산·PER_* 동적 수량은 0 취급.
+--   · IF 후속은 조건이 정적으로 판정돼 참일 때만 중첩 고정 가산을 계상
+--     (2026-08-08 유저 제보, OP12-098 잔털 처리권: "그 후 … +2000"이 통째로
+--     0 취급이라 8코 혁명군이 깔려 있어도 마젠타가 +2000만 보였다).
+--     판정 에러·실패·동적 수량은 종전대로 0 — 보수 규약은 그대로다.
+--   · effect 조건 = can_resolve(비대화형), action/IF 조건 = 어댑터 직판정
+--     (조건별 pcall 격리: 미지원 op가 한 장 전체 기대치를 죽이지 않게).
+--   · 표시 전용이므로 pcall 격리 — 평가기가 배틀을 죽이는 일은 없다.
+local function event_counter_expectation(card, player, live)
+	local ok, total = pcall(function()
+		if not (opcg.runtime and opcg.runtime.get_definition) then return 0 end
+		local definition = opcg.runtime.get_definition(card)
+		if not definition then return 0 end
+		local adapter = opcg.runtime.adapter
+		local function conditions_pass(conditions, context)
+			for _, condition in ipairs(conditions or {}) do
+				local okc, res = pcall(function()
+					return adapter and adapter:check_condition(condition, context)
+				end)
+				if not (okc and res) then return false end
+			end
+			return true
+		end
+		local function sum_actions(actions, context)
+			local sum = 0
+			for _, action in ipairs(actions or {}) do
+				if action.op == "MODIFY_POWER"
+					and type(action.amount) == "number" and action.amount > 0
+					and (not action.selector or action.selector.owner ~= "OPPONENT")
+					and conditions_pass(action.conditions, context) then
+					sum = sum + action.amount
+				elseif action.op == "IF" and conditions_pass(action.conditions, context) then
+					sum = sum + sum_actions(action.actions, context)
+				end
+			end
+			return sum
+		end
+		local sum = 0
+		for _, effect in ipairs(definition.effects or {}) do
+			local timed = false
+			for _, timing in ipairs(effect.timings or {}) do
+				if timing == "COUNTER" then timed = true break end
+			end
+			if timed then
+				local context = { card = card, player = player, timing = "COUNTER",
+					battle = live, battle_attacker = live.attacker,
+					battle_target = live.original_target }
+				if opcg.runtime.can_resolve(card, effect.effect_id, context) then
+					sum = sum + sum_actions(effect.actions, context)
+				end
+			end
+		end
+		return sum
+	end)
+	if ok and type(total) == "number" then return total end
+	return 0
+end
+
+-- picked(클릭 순서 배열)가 지금 확정되면 어택 타겟에 얹힐 총 타점.
+local function counter_expectation(picked, live)
+	local total = 0
+	for _, card in ipairs(picked) do
+		local value = opcg.EffectiveCounter(card, live.defending_player)
+		if value > 0 then
+			total = total + value
+		elseif opcg.IsEvent(card) then
+			total = total + event_counter_expectation(card, live.defending_player, live)
+		end
+	end
+	return total
+end
+
+-- 집힌 이벤트들의 둥 지불 풋프린트(레스트 코스트 합). EB01-038류 특수
+-- 지불(둥 반납)은 여기 안 잡히는 잔여 모서리 — 해결부의 장당 재확인이
+-- 그대로 받치고, 기대치도 그 시점 재평가로 자기 보고한다.
+local function picked_don_footprint(picked, player)
+	local total = 0
+	for _, card in ipairs(picked) do
+		if opcg.EffectiveCounter(card, player) <= 0 and opcg.IsEvent(card) then
+			total = total + opcg.GetCost(card)
+		end
+	end
+	return total
+end
+
+-- [2026-08-06 개편] 일괄 창 → 셀렉·언셀렉 토글 루프(유저 원안).
+--   · 토글마다 둥 예산 재산정: 집힌 이벤트 코스트 합을 넘기는 후보는
+--     selectable에서 제외 — "조용한 불발"을 선택 단계에서 원천 봉쇄.
+--   · picked = 클릭 순서 보존 배열, 해결 순서가 곧 이 순서(총합룰
+--     "한 장씩 사용" 정합 — 조건 이벤트끼리의 교호도 유저가 순서로 다스린다).
+--   · 토글마다 기대치 푸시 — 마젠타가 이벤트 몫까지 실시간 진실.
+--   0장 확정 = 사양(finishable, 현행 사양 유지). 두 그룹은 서로소 유지
+--   (SelectUnselect는 겹치면 nil을 던진다 — libgroup 실측).
 local function select_counters(player, candidates, live)
 	if #candidates == 0 then
 		-- 심리전: 한 어택의 첫 카운터 창은 쓸 게 없어도 프롬프트를 띄운다.
@@ -192,12 +302,41 @@ local function select_counters(player, candidates, live)
 		return {}
 	end
 	live.counter_prompted = true
-	-- 일괄 선택(min 0 = 사양 가능): 한 창에서 여러 장을 집고 뺄 수 있고,
-	-- 0장 확정이 곧 거절이다 — 장당 예/아니오 왕복 없음. 마젠타 합산
-	-- 프리뷰(⑤)가 이 선택 중 실시간으로 붙는다.
-	Duel.Hint(HINT_SELECTMSG, player, B.COUNTER_SELECT_HINT)
-	local picked = to_group(candidates):Select(player, 0, #candidates, nil)
-	return array(picked)
+	local picked = {}
+	local picked_group = Group.CreateGroup()
+	while true do
+		local budget = opcg.ActiveDon(player) - picked_don_footprint(picked, player)
+		local selectable = Group.CreateGroup()
+		for _, card in ipairs(candidates) do
+			if not picked_group:IsContains(card) then
+				local value = opcg.EffectiveCounter(card, player)
+				if value > 0 or opcg.GetCost(card) <= budget then
+					selectable:AddCard(card)
+				end
+			end
+		end
+		-- 양쪽 다 빈 그룹이면 호출 금지(코어 step0가 빈 창을 안 열고 빈
+		-- 반환을 뱉는 경계 — libgroup이 list[0]을 집다 넘어진다). 정상
+		-- 흐름에선 도달 불가지만 안전핀으로 박아둔다.
+		if selectable:GetCount() == 0 and #picked == 0 then break end
+		Duel.SetCounterPreviewExpectation(player, counter_expectation(picked, live))
+		Duel.Hint(HINT_SELECTMSG, player, B.COUNTER_SELECT_HINT)
+		local toggled = selectable:SelectUnselect(picked_group, player, true, false, 0, #candidates)
+		if not toggled then break end
+		if picked_group:IsContains(toggled) then
+			picked_group:RemoveCard(toggled)
+			for index, card in ipairs(picked) do
+				if card == toggled then
+					table.remove(picked, index)
+					break
+				end
+			end
+		else
+			picked_group:AddCard(toggled)
+			picked[#picked + 1] = toggled
+		end
+	end
+	return picked
 end
 
 -- 카운터 수치는 현재 어택 타겟에 '이 배틀 동안'의 파워로 얹는다. 표시
@@ -243,10 +382,20 @@ local function resolve_event_counter(card, live)
 	})
 end
 
+-- picked의 index 이후 꼬리(아직 해결 안 된 몫).
+local function picked_tail(picked, from)
+	local tail = {}
+	for index = from, #picked do tail[#tail + 1] = picked[index] end
+	return tail
+end
+
 local function run_counter_step(live)
 	while true do
 		local target = Duel.GetAttackTarget()
-		if not target then return end
+		if not target then
+			Duel.SetCounterPreviewExpectation(live.defending_player, 0)
+			return
+		end
 		local candidates = {}
 		for _, card in ipairs(array(Duel.GetFieldGroup(live.defending_player, LOCATION_HAND, 0))) do
 			local counter_value = opcg.EffectiveCounter(card, live.defending_player)
@@ -261,32 +410,52 @@ local function run_counter_step(live)
 			end
 		end
 		local picked = select_counters(live.defending_player, candidates, live)
-		if #picked == 0 then return end
-		-- 수치 카운터는 한 묶음으로 트래시 + 합산 한 방에 부여
-		local chars = Group.CreateGroup()
-		local total = 0
-		for _, card in ipairs(picked) do
-			local value = opcg.EffectiveCounter(card, live.defending_player)
-			if value > 0 then
-				chars:AddCard(card)
-				total = total + value
-			end
+		if #picked == 0 then
+			Duel.SetCounterPreviewExpectation(live.defending_player, 0)
+			return
 		end
-		if total > 0 then
-			Duel.SendtoGrave(chars, REASON_COST)
-			apply_counter_power(live, target, total)
-			live.counter_power = live.counter_power + total
-		end
-		-- 이벤트 카운터는 한 장씩 해석(공식 순차 사용) — 앞선 해석이 둥을
-		-- 소모했을 수 있으니 장마다 지불 가능성을 재확인한다.
+		-- [2026-08-06 개편] 해결 = 클릭 순서 그대로(총합룰 "한 장씩 사용").
+		-- 연속 수치 구간만 한 묶음 트래시+합산(교환법칙 등가, 연출 절약).
+		-- 단계마다 남은 몫 기대치를 다시 밀어 마젠타가 이중가산 없이 진실을
+		-- 유지한다 — 이벤트가 둥·조건을 바꾸면 다음 푸시가 그걸 반영한다.
 		local resolved_event = false
-		for _, card in ipairs(picked) do
-			if opcg.EffectiveCounter(card, live.defending_player) <= 0 and opcg.IsEvent(card)
-				and opcg.CanRestDon(live.defending_player, opcg.GetCost(card)) then
-				resolve_event_counter(card, live)
-				resolved_event = true
+		local index = 1
+		while index <= #picked do
+			target = Duel.GetAttackTarget()
+			local card = picked[index]
+			if opcg.EffectiveCounter(card, live.defending_player) > 0 then
+				local chars = Group.CreateGroup()
+				local total = 0
+				while index <= #picked do
+					local run_card = picked[index]
+					local run_value = opcg.EffectiveCounter(run_card, live.defending_player)
+					if run_value > 0 then
+						chars:AddCard(run_card)
+						total = total + run_value
+						index = index + 1
+					else
+						break
+					end
+				end
+				Duel.SendtoGrave(chars, REASON_COST)
+				if target then
+					apply_counter_power(live, target, total)
+					live.counter_power = live.counter_power + total
+				end
+			else
+				-- 앞선 해석이 둥을 소모했을 수 있으니 장마다 지불 재확인
+				-- (예산 봉쇄 후 남은 유일한 관문 = 특수 지불 모서리).
+				if opcg.IsEvent(card)
+					and opcg.CanRestDon(live.defending_player, opcg.GetCost(card)) then
+					resolve_event_counter(card, live)
+					resolved_event = true
+				end
+				index = index + 1
 			end
+			Duel.SetCounterPreviewExpectation(live.defending_player,
+				counter_expectation(picked_tail(picked, index), live))
 		end
+		Duel.SetCounterPreviewExpectation(live.defending_player, 0)
 		-- 이벤트가 상태를 바꿨으면 창을 다시 연다(추가 사용 기회);
 		-- 수치 카운터만 썼다면 전 후보가 이미 한 창에 나왔으니 종료.
 		if not resolved_event then return end
@@ -448,6 +617,8 @@ function B.install()
 			and target:IsLocation(LOCATION_MZONE)
 			and attacker and attacker:GetAttack() >= target:GetAttack() then
 			opcg.ReturnAttachedDon(target)
+			-- [2026-08-10 룰 재정] 무효 상태로 KO → 【KO 시】 봉인 스탬프
+			if opcg.StampNegatedKO then opcg.StampNegatedKO(target) end
 			local moved = Duel.Destroy(target, REASON_BATTLE)
 			if moved > 0 then
 				Duel.RaiseSingleEvent(target, EVENT_DESTROYED, nil,
@@ -460,7 +631,10 @@ function B.install()
 		if target and live.final_target_is_character
 			and target:IsLocation(LOCATION_GRAVE) and target:IsReason(REASON_BATTLE) then
 			dispatch({attacker}, "ON_BATTLE_KO", context)
-			dispatch({target}, "ON_SELF_KO", context)
+			-- [2026-08-10 룰 재정] 무효된 채 KO된 캐릭터는 자기 KO 타이밍도 봉인
+			if target:GetFlagEffect(opcg.FLAG_NEGATED_KO) == 0 then
+				dispatch({target}, "ON_SELF_KO", context)
+			end
 			-- KO 계열 공통 정제 문맥: event_target에 KO된 캐릭터를 박은 사본.
 			-- live.context를 그대로 주면 ①리더 히트가 남긴 damage가 '데미지
 			-- 받음' 분기를 오발시키고 ②EVENT_TARGET_* 조건(행콕 OP14-041 등)이

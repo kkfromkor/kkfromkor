@@ -16,6 +16,7 @@ local CONDITION = {
 	LEADER_HAS_TRAIT=true, LEADER_HAS_TRAIT_ANY=true, LEADER_TRAIT_CONTAINS=true,
 	LEADER_NAME_IS=true, LEADER_NAME_IS_ANY=true, LEADER_IS_MULTICOLOR=true,
 	LEADER_POWER_LTE=true, EVENT_ACTIVATED_THIS_TURN=true,
+	CHARACTER_KOED_THIS_TURN=true, EVENT_PLAYED_FROM_TRASH=true,
 	FIELD_DON_LTE=true, PERSONAL_TURN_GTE=true,
 	ALL_OWN_CHARACTERS_HAVE_TRAIT=true, OPPONENT_GIVEN_DON_EXISTS=true,
 	LEADER_HAS_ATTRIBUTE=true, LEADER_HAS_COLOR=true, LEADER_STATE_IS=true,
@@ -206,9 +207,17 @@ local function zone_group(player, location, filter, context)
 	if not predicate then return nil end
 	return Duel.GetMatchingGroup(predicate, player, location, 0, nil)
 end
-local function select_zone(player, location, filter, minimum, maximum, chooser, context)
+local function select_zone(player, location, filter, minimum, maximum, chooser, context, extra_filter)
 	local group = zone_group(player, location, filter, context)
 	if not group then return nil, "UNSUPPORTED_FILTER" end
+	if extra_filter then
+		-- 등장 불가 카드(OP12-036 조로류)를 후보에서 제외하느라 EXACT
+		-- 최소치가 깨지면 가능한 만큼으로 낮춘다 — 종전엔 골라도 최종
+		-- 관문에서 불발이라 선택만 낭비됐다.
+		local filtered = group:Filter(extra_filter, nil)
+		if filtered:GetCount() < minimum then minimum = filtered:GetCount() end
+		group = filtered
+	end
 	if group:GetCount() < minimum then return nil, "NOT_ENOUGH_CARDS" end
 	maximum = math.min(maximum, group:GetCount())
 	if maximum == 0 then return {} end
@@ -262,6 +271,8 @@ local function remove_cards(cards, reason, destination)
 		-- a K.O. is a real destroy: immunity (INDESTRUCTABLE), EVENT_DESTROYED
 		-- and the native replacement machinery all hang off Duel.Destroy —
 		-- SendtoGrave used to bypass every one of them
+		-- [2026-08-10 룰 재정] 무효 상태로 KO → 【KO 시】 봉인 스탬프
+		if opcg.StampNegatedKO then opcg.StampNegatedKO(cards) end
 		moved = Duel.Destroy(group, reason & ~REASON_DESTROY)
 	else moved = Duel.SendtoGrave(group, reason) end
 	if opcg.contract_ops and opcg.contract_ops.after_remove then
@@ -282,7 +293,7 @@ local function place_character_card(card, player, rested, context)
 	-- (유저 제보 2026-08-03: 효과 경유 등장이 제약 무시). 모든 효과 등장이
 	-- 이 관문을 지나므로 여기서 일원 봉쇄한다.
 	if opcg.contract_ops and opcg.contract_ops.player_has
-		and opcg.contract_ops.player_has(player, opcg.EFFECT_CANNOT_PLAY, card, context) then
+		and opcg.contract_ops.player_has(player, opcg.EFFECT_CANNOT_PLAY, card, context, "EFFECT") then
 		return false
 	end
 	-- [OPCG] 지속 '레스트로 등장'(EFFECT_PLAY_RESTED — 예: OP09-022 리무
@@ -408,12 +419,23 @@ local function character_count(player, condition, context)
 	-- 종전엔 자기 쪽만 훑어 상대의 코스트 0 캐릭터를 못 봤다(OP14-090 유저 제보:
 	-- 조건 성립인데 등장 턴 캐릭터 어택 허가가 안 켜짐).
 	local opponent_side = condition.player == "ANY" and LOCATION_MZONE or 0
-	return Duel.GetMatchingGroupCount(function(card)
+	local matches = function(card)
 		return opcg.IsCharacter(card)
 			and (condition.state == nil or (condition.state == "ACTIVE" and opcg.IsActive(card))
 				or (condition.state == "RESTED" and opcg.IsRested(card)))
 			and predicate(card)
-	end, player, LOCATION_MZONE, opponent_side, nil)
+	end
+	if condition.distinct_names then
+		-- [OP16-038] "카드명이 다른 ~ 캐릭터가 N장 있는 경우": 이름 기준
+		-- 중복 제거 후 센다(별쇄는 GetName이 정본명으로 정규화).
+		local group = Duel.GetMatchingGroup(matches, player, LOCATION_MZONE, opponent_side, nil)
+		local names = {}
+		for card in aux.Next(group) do names[opcg.GetName(card)] = true end
+		local total = 0
+		for _ in pairs(names) do total = total + 1 end
+		return total
+	end
+	return Duel.GetMatchingGroupCount(matches, player, LOCATION_MZONE, opponent_side, nil)
 end
 local function comparison_count(condition, context)
 	local op = condition.op
@@ -460,6 +482,22 @@ function C.CheckCondition(op, condition, context)
 	if op == "CHARACTER_EXISTS" then
 		local count = character_count(player, condition, context)
 		return count ~= nil and count > 0
+	end
+	if op == "CHARACTER_KOED_THIS_TURN" then
+		-- [OP16-100] "이번 턴, 상대 캐릭터가 KO되어 있는 경우": 전투/효과
+		-- 불문 캐릭터 KO 턴 이력(contract_ops.after_remove가 도장). player
+		-- 기본값은 OPPONENT — 무주어 원문이 "상대 캐릭터"라서다.
+		local target = opcg.ResolvePlayer(condition.player or "OPPONENT", context)
+		local log = opcg._koed_this_turn
+		return log ~= nil and log.turn == (Duel.GetTurnCount and Duel.GetTurnCount() or 0)
+			and log[target] == true
+	end
+	if op == "EVENT_PLAYED_FROM_TRASH" then
+		-- [OP16-079] "트래시에서 캐릭터가 등장했을 때" 청취 조건: 등장
+		-- 이벤트의 카드가 직전 위치 트래시였는지로 판별(별도 배관 불요).
+		local card = context and (context.played_card or context.event_target)
+		return card ~= nil and card.GetPreviousLocation ~= nil
+			and card:GetPreviousLocation() == LOCATION_GRAVE
 	end
 	if op == "LEADER_OR_CHARACTER_EXISTS" then
 		local predicate = filter_for(condition.filter, context)
@@ -1223,8 +1261,39 @@ local function play_from_zone(action, location, context)
 	local chooser = controller(context)
 	local minimum = action.mode == "EXACT" and (action.count or 1) or 0
 	local maximum = action.count or 1
-	local cards, reason = select_zone(player, location, action.filter, minimum, maximum, chooser, context)
-	if cards == nil then error(reason) end
+	-- 효과로 등장할 수 없는 카드(OP12-036 조로: 패 상주 제약)는 후보에서
+	-- 제외 — 패 상주 효과라 패 밖의 사본은 자연히 안 걸린다.
+	local playable = function(candidate)
+		return not (opcg.contract_ops and opcg.contract_ops.player_has
+			and opcg.contract_ops.player_has(player, opcg.EFFECT_CANNOT_PLAY, candidate, context, "EFFECT"))
+	end
+	local cards
+	if action.distinct_names then
+		-- [OP16-060] "카드명이 다른 ~ N장까지 등장": 한 창 다중 선택으론
+		-- 상호 이름 배제를 걸 수 없어 축차 선택 — 집을 때마다 그 이름을
+		-- 후보에서 뺀다. EXACT여도 후보가 마르면 가능한 만큼.
+		cards = {}
+		local names = {}
+		for _ = 1, maximum do
+			local group = zone_group(player, location, action.filter, context)
+			if not group then error("UNSUPPORTED_FILTER") end
+			local candidates = group:Filter(function(candidate)
+				return playable(candidate) and not names[opcg.GetName(candidate)]
+			end, nil)
+			for _, previous in ipairs(cards) do candidates:RemoveCard(previous) end
+			if candidates:GetCount() == 0 then break end
+			local need = #cards < minimum and 1 or 0
+			local selected = candidates:Select(chooser, need, 1, nil)
+			local card = selected:GetFirst()
+			if not card then break end
+			names[opcg.GetName(card)] = true
+			cards[#cards + 1] = card
+		end
+	else
+		local reason
+		cards, reason = select_zone(player, location, action.filter, minimum, maximum, chooser, context, playable)
+		if cards == nil then error(reason) end
+	end
 	local played = {}
 	for _, card in ipairs(cards) do
 		if play_card(card, player, chooser, action.rested == true, context) then played[#played + 1] = card end
@@ -1575,6 +1644,15 @@ function C.ExecuteAction(op, action, context)
 			local merged = {}
 			for key, value in pairs(selector or {}) do merged[key] = value end
 			merged.chooser = action.chooser
+			selector = merged
+		end
+		-- KO 대상 선택 안내문(2026-08-06 유저 하달, OP08-118발 전 KO 공통):
+		-- 게임 상단에 "KO할 캐릭터를 골라주세요"를 통일 표기. 문구가
+		-- "캐릭터"라 캐릭터 셀렉터에만 붙인다(STAGE KO 5종은 제외).
+		if op == "KO" and selector ~= nil and selector.kind == "CHARACTER" and selector.hint == nil then
+			local merged = {}
+			for key, value in pairs(selector) do merged[key] = value end
+			merged.hint = opcg.HINT_SELECT_KO
 			selector = merged
 		end
 		cards = choose_selector(selector, context)
@@ -2360,6 +2438,9 @@ function C.BindCard(card, definition)
 						local handler = e:GetHandler()
 						return handler:IsReason(REASON_DESTROY)
 							and handler:IsPreviousLocation(LOCATION_MZONE)
+							-- [2026-08-10 룰 재정] 무효된 채 KO된 캐릭터의 【KO 시】는
+							-- 발동 불가(공식 메커니즘) — KO 관문의 스탬프 판독.
+							and handler:GetFlagEffect(opcg.FLAG_NEGATED_KO) == 0
 					end)
 				end
 				if timing == "ON_OPPONENT_ATTACK" and opcg.effect_queue then

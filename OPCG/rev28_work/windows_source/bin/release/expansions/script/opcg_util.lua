@@ -375,6 +375,15 @@ end
 -- Cost lives in cdb level; get_level() also zeroes non-MONSTER frames, so
 -- events/stages fall back to the original printed cost (their cost modifiers
 -- flow through the play-discount channel, not EFFECT_UPDATE_LEVEL).
+-- [2026-08-07 안전핀] 채널 판독 재진입 잠금. IsHasEffect는 그 효과의 조건·
+-- 대상 함수를 실행한다 — 그 평가 사슬이 어디서든 GetCost에 되돌아오면
+-- (코스트 참조 조건/필터, 미로드 카드 지연 등록 연쇄 등) C 스택이 무한히
+-- 자란다(08-07 지인 실크래시: 08-01판 데이터 C stack overflow, GetCost↔
+-- continuous_condition 왕복 실측). 잠금 중 재진입은 채널 몫 없이 인쇄
+-- 코스트로 즉답 — 순간의 과소가 무한 재귀보다 낫고, 바깥 판독이 끝나면
+-- 정상값으로 돌아온다. 판독 자체도 pcall 격리(평가 중 오류가 코스트
+-- 조회를 죽이지 않게).
+local reading_hand_cost = false
 function opcg.GetCost(c)
 	local t = type(c)
 	if t ~= "Card" and t ~= "userdata" then return 0 end
@@ -392,12 +401,16 @@ function opcg.GetCost(c)
 		-- 발신하는 전용 채널을 여기서 합산한다. 조건(트래시 매수 등)·범위
 		-- (패 한정) 판정은 IsHasEffect가 효과 시스템 규칙대로 수행. 카드당
 		-- 1건 판독(현 코퍼스에 중첩 사례 없음).
-		if opcg.EFFECT_MODIFY_HAND_COST and c.IsHasEffect then
-			local e = c:IsHasEffect(opcg.EFFECT_MODIFY_HAND_COST)
-			if e then
+		if opcg.EFFECT_MODIFY_HAND_COST and c.IsHasEffect and not reading_hand_cost then
+			reading_hand_cost = true
+			local ok, delta = pcall(function()
+				local e = c:IsHasEffect(opcg.EFFECT_MODIFY_HAND_COST)
+				if not e then return 0 end
 				local v = e.GetValue and e:GetValue()
-				if type(v) == "number" then cost = cost + v end
-			end
+				return type(v) == "number" and v or 0
+			end)
+			reading_hand_cost = false
+			if ok and type(delta) == "number" then cost = cost + delta end
 		end
 	end
 	if cost < 0 then cost = 0 end
@@ -466,9 +479,14 @@ function opcg.CounterGrant(card, player)
 							local owner_ok = sel.owner == nil or sel.owner == "ANY"
 								or (sel.owner == "YOU" and granter:GetControler() == player)
 								or (sel.owner == "OPPONENT" and granter:GetControler() ~= player)
+							-- [OP16-118] zone=HAND 부여("자신의 패의 ~ 카드는
+							-- 카운터+2000이 된다"): 명시 존이 있으면 존중.
+							local zone_ok = sel.zone == nil
+								or (sel.zone == "HAND" and card:IsLocation(LOCATION_HAND))
+								or (sel.zone == "FIELD" and card:IsLocation(LOCATION_MZONE))
 							local kind = opcg.KindPredicate(sel.kind or "CHARACTER")
 							local filt = opcg.CompileFilter(sel.filter, { card = granter, player = player })
-							if owner_ok and kind and kind(card) and filt and filt(card) then
+							if owner_ok and zone_ok and kind and kind(card) and filt and filt(card) then
 								total = total + (action.amount or 0)
 							end
 						end
@@ -686,6 +704,16 @@ function opcg.GetCandidateGroup(selector, context)
 		target_player, loc_self, loc_opp, nil)
 end
 
+-- 게임 상단 선택 안내문(HINT_SELECTMSG): 문구는 저장소 루트 strings.conf의
+-- !system 항목. ID는 0x100000 미만이어야 클라이언트 GetDesc가 code==0으로
+-- 판정해 시스템 스트링을 찾는다(공식 ID는 ~12125, 880010대는 빈 영역).
+-- [2026-08-07 병합] 레포측 OP08-118 시공분(4a36d28)을 캐논에 역이식.
+opcg.HINT_SELECT_KO = 880012
+opcg.SELECT_HINT_BY_AMOUNT = {
+	[-3000] = 880010,
+	[-2000] = 880011,
+}
+
 function opcg.SelectCards(selector, context)
 	selector = selector or {}
 	context = context or {}
@@ -718,6 +746,7 @@ function opcg.SelectCards(selector, context)
 				return opcg.GetPower(card) <= remaining
 			end, nil)
 			if affordable:GetCount() == 0 then break end
+			if selector.hint then Duel.Hint(HINT_SELECTMSG, chooser, selector.hint) end
 			local picked = affordable:Select(chooser, 0, 1, nil)
 			local card = picked:GetFirst()
 			if not card then break end
@@ -729,6 +758,7 @@ function opcg.SelectCards(selector, context)
 		if #selected < minimum then return nil, "NOT_ENOUGH_TARGETS" end
 		return selected
 	end
+	if selector.hint then Duel.Hint(HINT_SELECTMSG, chooser, selector.hint) end
 	local selected = candidates:Select(chooser, minimum, maximum, nil)
 	-- 효과 대상 가시성(2026-07-27): 고른 카드를 양측에 공지 — 현대 EDOPro
 	-- 표준 관용구(트리슈라: Select 직후 Duel.HintSelection(g, true) =
